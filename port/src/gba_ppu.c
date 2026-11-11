@@ -721,12 +721,15 @@ INL void FastBgT(Ctx *c, int n, int y, int track, int world)
 static struct { u8 on; u8 data[32]; } sLight[LIGHT_ROWS][32];
 static s8 sLightRow[704];              // per window tile: the board row it was assigned to (-1: none yet)
 static u32 sLightVer;
+static u8 sLightDirty[LIGHT_ROWS];     // board tile rows whose lamp pictures changed since the layer was last drawn
+static int sLightFull = 1;             // the whole layer has to be drawn again (after a reset)
 
 void PpuLightReset(void)
 {
     memset(sLight, 0, sizeof sLight);
     memset(sLightRow, -1, sizeof sLightRow);
     sLightVer++;
+    sLightFull = 1;
 }
 
 static const u8 *BoardTile(int trow, int col)
@@ -762,6 +765,7 @@ void PpuNoteTileWrite(const void *dest, const void *src, u32 bytes)
             memcpy(sLight[row][col].data, w, 32);
             sLight[row][col].on = 1;
             sLightVer++;
+            if (row < LIGHT_ROWS) sLightDirty[row] = 1;
         }
     }
 }
@@ -797,6 +801,7 @@ static void LayerSources(int n, u16 cnt, const u8 **chr0, u32 *len0, const u8 **
     }
 }
 
+// 0 = unchanged, 1 = draw the whole layer again, 2 = only the lamp pictures changed (see sLightDirty)
 static int LayerDirty(int n)
 {
     Layer *L = &sLayer[n - 1];
@@ -805,13 +810,17 @@ static int LayerDirty(int n)
     const u8 *map = gGbaVram + ((cnt >> 8) & 0x1F) * 0x800;
     const u8 *c0, *c1; u32 l0, l1;
     LayerSources(n, cnt, &c0, &l0, &c1, &l1);
-    int dirty = !L->valid || cnt != L->cnt || hofs != L->hofs || (cnt & 0x80) || (n == 3 && L->lightVer != sLightVer) ||
+    int lightChange = n == 3 && L->lightVer != sLightVer;
+    int dirty = !L->valid || cnt != L->cnt || hofs != L->hofs || (cnt & 0x80) || (lightChange && sLightFull) ||
                 memcmp(L->map, map, maplen) || memcmp(L->chr, c0, l0) || (l1 && memcmp(L->chr + l0, c1, l1));
     if (dirty) {
         memcpy(L->map, map, maplen); memcpy(L->chr, c0, l0); if (l1) memcpy(L->chr + l0, c1, l1);
         L->cnt = cnt; L->hofs = hofs; L->chrLen = l0 + l1; L->lightVer = sLightVer;
+        if (n == 3) { sLightFull = 0; memset(sLightDirty, 0, sizeof sLightDirty); }
+        return 1;
     }
-    return dirty;
+    if (lightChange) { L->lightVer = sLightVer; return 2; }
+    return 0;
 }
 
 // One row of a 4-bit text layer as palette indices (0 = nothing).
@@ -873,8 +882,18 @@ static void RefreshLayers(void)
         static int off = -1;
         if (off < 0) off = getenv("PORT_NOCACHE") != NULL;     // test switch: draw the layers directly
         if (off || !(R16(0) & (0x100 << n)) || (R16(0x08 + n * 2) & 0x80)) { sLayer[n - 1].valid = 0; continue; }
-        if (!LayerDirty(n)) continue;
+        int d = LayerDirty(n);
+        if (!d) continue;
         Layer *L = &sLayer[n - 1];
+        if (d == 2) {                  // blinking lamps: redraw only the tile rows they sit in
+            for (int tr = 0; tr < LIGHT_ROWS; tr++) {
+                if (!sLightDirty[tr]) continue;
+                sLightDirty[tr] = 0;
+                for (int R = tr * 8; R < tr * 8 + 8 && R < TALL_H; R++)
+                    BuildLayerRow(n, R, sLayerIdx[n - 1] + R * GBA_W, &L->xmin[R], &L->xmax[R]);
+            }
+            continue;
+        }
         for (int R = 0; R < TALL_H; R++)
             BuildLayerRow(n, R, sLayerIdx[n - 1] + R * GBA_W, &L->xmin[R], &L->xmax[R]);
         L->valid = 1;
