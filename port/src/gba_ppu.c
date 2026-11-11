@@ -616,6 +616,8 @@ static Spr sTSpr[PORT_OAM_N];
 static u16 sTRow[TALL_H][PORT_OAM_N];   // per tall row: the sprites (indices into sTSpr, lowest OAM slot first) that touch it
 static u16 sTRowN[TALL_H];
 static u8 sTSemi[TALL_H];
+static unsigned sStSlow, sStRebuilt, sStSprites, sStFrames;   // diagnostics for the perf log
+static u16 sStBld, sStDisp;
 static int sUi0 = TALL_BAND;            // first tall row of the fixed-on-screen band, set per frame by the layout
 static u8 sLineRegs[GBA_H][0x58];      // DISPCNT .. BLDY as each scanline saw them
 
@@ -889,6 +891,7 @@ static void RefreshLayerColours(Layer *L, int n)
 // One row of a 4-bit text layer as palette indices (0 = nothing), the whole map row without scroll.
 static void BuildLayerRow(int n, int R)
 {
+    sStRebuilt++;
     Layer *L = &sLayer[n - 1];
     u8 *out = sLayerIdx[n - 1] + R * LSTRIDE;
     u16 cnt = R16(0x08 + n * 2);
@@ -1058,6 +1061,8 @@ static void ComposeRowT(int R, u16 *dst)
         return;
     }
 
+    __atomic_fetch_add(&sStSlow, 1, __ATOMIC_RELAXED);
+    sStBld = bld; sStDisp = dispcnt;
     for (int i = 0; i < GBA_W + 16; i++) { c->topC[i] = back; c->topL[i] = LY_BD; c->botL[i] = LY_NONE; }
     PaintRowT(c, R, dispcnt, 1);
     int eva = R16(0x52) & 0x1F, evb = (R16(0x52) >> 8) & 0x1F, evy = R16(0x54) & 0x1F;
@@ -1127,6 +1132,7 @@ void PpuRenderTall(u16 *dst, u16 *right, int depth)
     }
     RebuildSpritesTall();
     RefreshLayers();
+    sStFrames++;
     // The rows are drawn by two threads: the lower half on the New 3DS's spare core,
     // or, with 3D on, one eye each. Each task is a run of rows for one eye.
     Job a, w;
@@ -1144,4 +1150,13 @@ void PpuRenderTall(u16 *dst, u16 *right, int depth)
     RunJob(&a);
     if (async) PlatJobWait(); else RunJob(&w);
     sIo = gGbaIo;
+}
+
+// Averages per frame since the last call, for the perf log: rows drawn on the slow blending path,
+// layer rows rebuilt, and the last blend and display control values seen on a slow row.
+void PpuStats(unsigned *slowRows, unsigned *rebuilt, unsigned *bld, unsigned *disp)
+{
+    unsigned f = sStFrames ? sStFrames : 1;
+    *slowRows = sStSlow / f; *rebuilt = sStRebuilt / f; *bld = sStBld; *disp = sStDisp;
+    sStSlow = sStRebuilt = sStFrames = 0;
 }

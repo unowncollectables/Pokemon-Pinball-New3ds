@@ -150,6 +150,8 @@ void PlatPresentTall(const u16 *src, const u16 *right)
 }
 
 static void SaveView(void);
+static void WriteView(void);
+static int sViewSaveAt;                        // frame number at which view.cfg is written (0 = nothing pending)
 
 // ---- second thread -----------------------------------------------------
 static Thread sWorker;
@@ -198,6 +200,7 @@ int PlatPump(void)
 {
     if (!aptMainLoop()) return 0;
     hidScanInput();
+    if (sViewSaveAt && (int)gPortFrame >= sViewSaveAt) { sViewSaveAt = 0; WriteView(); }
     if (hidKeysDown() & KEY_Y) { gPortView ^= 1; SaveView(); }
     u32 k = hidKeysHeld();
     if ((k & KEY_SELECT) && gPortView) {    // SELECT + up/down: tune how many table rows hide behind the gap between the screens
@@ -300,7 +303,8 @@ int PlatFileWrite(const char *name, const void *buf, size_t size)
     return (int)n;
 }
 
-static void SaveView(void) { char v[2] = { gPortView ? '1' : '0', (char)('A' + gPortSeam) }; PlatFileWrite("view.cfg", v, 2); }
+static void WriteView(void) { char v[2] = { gPortView ? '1' : '0', (char)('A' + gPortSeam) }; PlatFileWrite("view.cfg", v, 2); }
+static void SaveView(void) { sViewSaveAt = (int)gPortFrame + 90; }   // after the buttons have rested for 1.5 s, so a press never stalls a frame
 
 void PlatLog(const char *fmt, ...)
 {
@@ -316,6 +320,7 @@ u32 PlatTicksUs(void) { return (u32)(svcGetSystemTick() * 1000000ull / SYSCLOCK_
 
 void PlatShutdown(void)
 {
+    if (sViewSaveAt) { sViewSaveAt = 0; WriteView(); }
     if (sLog) fclose(sLog);
     if (sAudioOk) { ndspChnWaveBufClear(0); ndspExit(); linearFree(sAudioMem); }
     gfxExit();

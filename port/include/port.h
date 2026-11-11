@@ -58,6 +58,7 @@ extern u8 gPpuForceSlow;               // test switch: use the general renderer 
 enum { PERF_PPU, PERF_BLIT, PERF_VSYNC, PERF_SOUND, PERF_N };
 #define PERF_WINDOW 120
 void PerfAdd(int section, u32 us);
+void PpuStats(unsigned *slowRows, unsigned *rebuilt, unsigned *bld, unsigned *disp);   // per-frame averages since the last call
 void PerfFrameEnd(void);               // once per presented frame; logs every PERF_WINDOW frames
 
 // ---- Audio -----------------------------------------------------------
