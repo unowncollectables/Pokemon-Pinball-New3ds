@@ -905,7 +905,7 @@ INL void PaintRowT(Ctx *c, int R, int dispcnt, int track)
         bgOn[n] = (dispcnt & (0x100 << n)) != 0;
         bgPrio[n] = R16(0x08 + n * 2) & 3;
     }
-    bgOn[0] &= R >= sUi0 && R < sUi0 + GBA_H;   // the fixed layer lives in its band only
+    bgOn[0] &= R >= sUi0 && R < sUi0 + 144;   // the fixed layer lives in its band only; its stock score strip (last 16 rows) is left out, the panels show those numbers
     int objOn = (dispcnt & 0x1000) != 0;
     const u32 *mask = sTMask[R];
     for (int p = 3; p >= 0; p--) {
