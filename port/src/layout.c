@@ -265,7 +265,7 @@ void LayoutFrame(const u16 *tall, const u16 *right)
 
 #define MENU_X 80
 #define MENU_Y 40
-static void PaintMenuPanels(void)
+static void PaintMenuPanels(int fill)
 {
     // top: the 240x160 picture sits at 1:1 in the middle (pixel for pixel, no scaling);
     // everything around it is our own backdrop in the same style as the bottom panel
@@ -276,7 +276,10 @@ static void PaintMenuPanels(void)
             sTop[y * TW + x] = Rgb(16 + k, 22 + k + t / 16, 52 + k + t / 6);
         }
     }
-    {
+    if (fill) {                        // 1.5x: the picture covers 360 of the 400 columns, a rule closes each side
+        const u16 red = Rgb(230, 70, 60), blue = Rgb(70, 130, 240);
+        for (int y = 0; y < PH; y++) { sTop[y * TW + 19] = sTop[y * TW + 380] = red; sTop[y * TW + 18] = sTop[y * TW + 381] = blue; }
+    } else {
         const u16 red = Rgb(230, 70, 60), blue = Rgb(70, 130, 240);
         for (int x = MENU_X - 2; x < MENU_X + GBA_W + 2; x++) {
             sTop[(MENU_Y - 2) * TW + x] = sTop[(MENU_Y + GBA_H + 1) * TW + x] = blue;
@@ -306,7 +309,7 @@ static void PaintMenuPanels(void)
     Text(sBot, BW, (BW - 17 * 6) / 2, 42, "RUBY AND SAPPHIRE", 1, soft);
     static const char *const rows[][2] = {
         { "L / R", "FLIPPERS" }, { "A", "LAUNCH AND SELECT" }, { "START", "PAUSE" },
-        { "Y", "WHOLE TABLE OR FOLLOW VIEW" }, { "3D SLIDER", "DEPTH" },
+        { "Y", "SWITCH VIEW AND MENU SIZE" }, { "3D SLIDER", "DEPTH" },
     };
     for (int i = 0; i < 5; i++) {
         int y = 80 + i * 24;
@@ -320,15 +323,34 @@ static void PaintMenuPanels(void)
     Text(sBot, BW, BW - 8 - n * 6, PH - 14, b, 1, soft);
 }
 
-// A 240x160 picture shown 1:1 in the middle of the top screen.
+// 240 source pixels to 360: every 2 become 3, the middle one blended.
+static void Row3of2(const u16 *s, u16 *d)
+{
+    for (int i = 0; i < 120; i++, s += 2, d += 3) { d[0] = s[0]; d[1] = Avg(s[0], s[1]); d[2] = s[1]; }
+}
+
+// A 240x160 picture on the top screen: 1:1 in the middle (view 0), or 1.5x filling the height (view 1).
 void LayoutMenuFrame(const u16 *src)
 {
-    if (sMode != 0) {
+    static int sMenuView = -1;
+    if (sMode != 0 || sMenuView != gPortView) {
         sMode = 0;
+        sMenuView = gPortView;
         sPaintedView = -1;             // the table panels are painted again when play resumes
-        PaintMenuPanels();
+        PaintMenuPanels(gPortView);
         sDirty = 2;
     }
-    for (int y = 0; y < GBA_H; y++)
-        memcpy(sTop + (MENU_Y + y) * TW + MENU_X, src + y * GBA_W, GBA_W * 2);
+    if (!gPortView) {
+        for (int y = 0; y < GBA_H; y++)
+            memcpy(sTop + (MENU_Y + y) * TW + MENU_X, src + y * GBA_W, GBA_W * 2);
+        return;
+    }
+    u16 r[2][360] __attribute__((aligned(4)));
+    u16 *d = sTop + 20;
+    for (int g = 0; g < 80; g++, src += 2 * GBA_W, d += 3 * TW) {
+        Row3of2(src, r[0]); Row3of2(src + GBA_W, r[1]);
+        memcpy(d, r[0], 720);
+        MixRows(r[0], r[1], d + TW, 360, 0);
+        memcpy(d + 2 * TW, r[1], 720);
+    }
 }

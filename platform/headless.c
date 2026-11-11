@@ -74,7 +74,7 @@ u16 PlatKeys(void)
 
 static void DumpPpm(const u16 *fb, int h);
 static void DumpPanels(int withRight);
-void PlatPresent(const u16 *fb) { DumpPpm(fb, GBA_H); LayoutMenuFrame(fb); DumpPanels(0); }
+void PlatPresent(const u16 *fb) { DumpPpm(fb, GBA_H); if (getenv("PORT_VIEW")) gPortView = atoi(getenv("PORT_VIEW")); LayoutMenuFrame(fb); DumpPanels(0); }
 #include <pthread.h>
 static pthread_t sWorker;
 static pthread_mutex_t sMu = PTHREAD_MUTEX_INITIALIZER;
