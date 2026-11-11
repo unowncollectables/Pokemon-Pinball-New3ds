@@ -30,6 +30,7 @@ static void ClearTop(void)
 
 // Which picture layout is on the panels: 0 = the plain 240x160 centred on the top screen, 1 = the tall table over both.
 static int sLayout;
+static int sConsole = 1;                            // log lines also go to the bottom screen until the game draws
 
 static void ClearBottom(void)
 {
@@ -40,6 +41,7 @@ static void ClearBottom(void)
 
 static void SetLayout(int layout)
 {
+    if (sConsole) { sConsole = 0; ClearBottom(); gfxFlushBuffers(); }
     if (layout == sLayout) return;
     sLayout = layout;
     ClearTop();                                     // both buffers: nothing of the old picture may linger
@@ -214,7 +216,7 @@ void PlatLog(const char *fmt, ...)
 {
     char line[256];
     va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
-    printf("%s\n", line);
+    if (sConsole) printf("%s\n", line);
     if (sLog) { fprintf(sLog, "%s\n", line); fflush(sLog); }
     if (strncmp(line, "perf:", 5)) CrashNote("%s", line);     // perf lines live in log.txt; keep the crumbs for events
 }
