@@ -607,6 +607,7 @@ static Spr sTSpr[PORT_OAM_N];
 static u8 sTSprLive[PORT_OAM_N];
 static u32 sTMask[TALL_H][TALL_MASKW];
 static u8 sTSemi[TALL_H];
+static int sUi0 = TALL_BAND;            // first tall row of the fixed-on-screen band, set per frame by the layout
 static u8 sLineRegs[GBA_H][0x58];      // DISPCNT .. BLDY as each scanline saw them
 
 extern u8 gBoardBGTileBuffer[], gBoardBGTileBufferAlt[];   // the board picture, 32 tile rows each
@@ -635,7 +636,7 @@ static void RebuildSpritesTall(void)
         else oy = y8 >= 160 ? y8 - 256 : y8;
         int ox = a1 & 0x1FF; if (ox >= 240) ox -= 512;
         if (ox + bw <= 0 || ox >= GBA_W) continue;
-        int base = ui ? TALL_BAND : 0, limit = ui ? GBA_H : TALL_H;
+        int base = ui ? sUi0 : 0, limit = ui ? GBA_H : TALL_H;
         int y0 = oy < 0 ? 0 : oy, y1 = oy + bh > limit ? limit : oy + bh;
         if (y0 >= y1) continue;
         int bpp8 = a0 & 0x2000;
@@ -904,13 +905,13 @@ INL void PaintRowT(Ctx *c, int R, int dispcnt, int track)
         bgOn[n] = (dispcnt & (0x100 << n)) != 0;
         bgPrio[n] = R16(0x08 + n * 2) & 3;
     }
-    bgOn[0] &= R >= TALL_BAND;         // the fixed layer lives in the bottom band only
+    bgOn[0] &= R >= sUi0 && R < sUi0 + GBA_H;   // the fixed layer lives in its band only
     int objOn = (dispcnt & 0x1000) != 0;
     const u32 *mask = sTMask[R];
     for (int p = 3; p >= 0; p--) {
         for (int n = 3; n >= 0; n--)
             if (bgOn[n] && bgPrio[n] == p) {
-                if (n == 0) FastBgT(c, 0, R - TALL_BAND, track, 0);
+                if (n == 0) FastBgT(c, 0, R - sUi0, track, 0);
                 else if (sLayer[n - 1].valid) OverlayLayer(c, n, R, track);
                 else FastBgT(c, n, R, track, 1);
             }
@@ -921,7 +922,7 @@ INL void PaintRowT(Ctx *c, int R, int dispcnt, int track)
                 int b = 31 - __builtin_clz(m);
                 m &= ~(1u << b);
                 const Spr *sp = &sTSpr[sTSprLive[w * 32 + b]];
-                if (sp->prio == p) { sObjDX = sp->ui ? 0 : sEyeDX[3]; FastObj(c, sp, sp->ui ? R - TALL_BAND : R, track); sObjDX = 0; }
+                if (sp->prio == p) { sObjDX = sp->ui ? 0 : sEyeDX[3]; FastObj(c, sp, sp->ui ? R - sUi0 : R, track); sObjDX = 0; }
             }
         }
     }
@@ -929,7 +930,7 @@ INL void PaintRowT(Ctx *c, int R, int dispcnt, int track)
 
 static void ComposeRowT(int R, u16 *dst)
 {
-    sIo = sLineRegs[R >= TALL_BAND ? R - TALL_BAND : 0];
+    sIo = sLineRegs[R >= sUi0 && R < sUi0 + GBA_H ? R - sUi0 : 0];
     u16 dispcnt = R16(0);
     if (dispcnt & 0x80) {
         for (int x = 0; x < GBA_W; x++) dst[x] = 0xFFFF;
@@ -1032,6 +1033,7 @@ static void RunJob(void *arg)
 void PpuRenderTall(u16 *dst, u16 *right, int depth)
 {
     sIo = gGbaIo;
+    sUi0 = LayoutCamera();
     static int palOk;
     if (!palOk || memcmp(sPalShadow, gGbaPltt, sizeof sPalShadow)) {
         const u16 *pl = (const u16 *)gGbaPltt;
