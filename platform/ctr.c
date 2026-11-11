@@ -17,12 +17,18 @@ u32 __stacksize__ = 0x40000;
 #define BOT_W 320
 #define BOT_H 240
 
+static int sConsole = 1;                            // log lines also go to the bottom screen until the game draws
+
 static void ClearTop(void)
 {
     for (int i = 0; i < 2; i++) {
         u16 w, h;
         u8 *fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
         memset(fb, 0, (size_t)w * h * 2);
+        if (!sConsole) {                            // the bottom screen is double buffered too once the game draws
+            fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+            memset(fb, 0, (size_t)w * h * 2);
+        }
         gfxSwapBuffers();
         gspWaitForVBlank();
     }
@@ -30,7 +36,6 @@ static void ClearTop(void)
 
 // Which picture layout is on the panels: 0 = the plain 240x160 centred on the top screen, 1 = the tall table over both.
 static int sLayout;
-static int sConsole = 1;                            // log lines also go to the bottom screen until the game draws
 
 static void ClearBottom(void)
 {
@@ -41,7 +46,14 @@ static void ClearBottom(void)
 
 static void SetLayout(int layout)
 {
-    if (sConsole) { sConsole = 0; ClearBottom(); gfxFlushBuffers(); }
+    if (sConsole) {
+        // From here the game draws the bottom screen every frame: double buffer it like the top one,
+        // or the panel shows half-drawn frames (tearing).
+        sConsole = 0;
+        gfxSetDoubleBuffering(GFX_BOTTOM, true);
+        ClearTop();
+        LayoutRepaint();
+    }
     if (layout == sLayout) return;
     sLayout = layout;
     ClearTop();                                     // both buffers: nothing of the old picture may linger
@@ -311,6 +323,7 @@ void PlatShutdown(void)
 
 void PlatFatalScreen(const char *text)
 {
+    gfxSetDoubleBuffering(GFX_BOTTOM, false);
     consoleInit(GFX_BOTTOM, NULL);
     printf("\x1b[2J\x1b[H%s\n\nSaved to %s/crash.txt\nPress START to exit.\n", text, DATA_DIR);
     gfxFlushBuffers(); gfxSwapBuffers();
