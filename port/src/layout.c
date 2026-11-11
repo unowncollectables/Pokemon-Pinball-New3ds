@@ -13,6 +13,10 @@ int gPortView;                         // 0 = whole table 1:1 with side panels, 
 int gPortField;                        // 0 Ruby, 1 Sapphire (set by the game each frame)
 int gPortBallY = -1;                   // ball row on the tall board, -1 when unknown
 
+static u16 sTopBg[TW * PH];            // the painted strips without text, so the numbers can be redrawn cheaply
+static unsigned sScoreLo, sScoreHi; static int sLives, sCoins;
+static unsigned sShown[4] = { 1, 1, 1, 1 };
+void LayoutStats(unsigned lo, unsigned hi, int lives, int coins) { sScoreLo = lo; sScoreHi = hi; sLives = lives; sCoins = coins; }
 static int sPaintedView = -1, sPaintedField = -1;
 static int sDirty;                     // frames for which the margins still have to be copied to the panels
 static int sR0;                        // zoomed view: first board row shown, scaled by 16
@@ -41,6 +45,20 @@ static const struct { char c; u8 r[7]; } sFont[] = {
     {'H', {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
     {'I', {0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E}},
     {'E', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}},
+    {'C', {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}},
+    {'O', {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}},
+    {'L', {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F}},
+    {'N', {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11}},
+    {'0', {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}},
+    {'1', {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}},
+    {'2', {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}},
+    {'3', {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E}},
+    {'4', {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}},
+    {'5', {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E}},
+    {'6', {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}},
+    {'7', {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}},
+    {'8', {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}},
+    {'9', {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}},
 };
 
 static inline u16 Rgb(int r, int g, int b) { return (u16)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)); }
@@ -101,10 +119,52 @@ static void Paint(void)
     int sc = (sw - 12) / (len * 6);
     if (sc < 1) sc = 1;
     if (sc > 3) sc = 3;
+    if (sw < len * 6 + 4) goto done;
     int x = (sw - len * 6 * sc + sc) / 2;
     u16 col = gPortField == 0 ? Rgb(255, 214, 190) : Rgb(205, 232, 255);
     Text(sTop, TW, x, 20, name, sc, col);
     Text(sTop, TW, tx + tw + x, 20, name, sc, col);
+done:
+    memcpy(sTopBg, sTop, sizeof sTop);
+    sShown[0] = ~0u;                   // numbers must be drawn again
+}
+
+// Number panel on the left top strip (1:1 view only): score, balls and coins, drawn in code.
+static void StatText(const char *label, const char *val, int y, int sw, int field)
+{
+    int ln = (int)strlen(label), vn = (int)strlen(val);
+    u16 lc = field == 0 ? Rgb(255, 190, 160) : Rgb(170, 215, 255), vc = Rgb(255, 255, 255);
+    int ls = 1;
+    int vs = (sw - 10) / (vn * 6);
+    if (vs < 1) vs = 1;
+    if (vs > 3) vs = 3;
+    Text(sTop, TW, (sw - ln * 6 * ls) / 2, y, label, ls, lc);
+    Text(sTop, TW, (sw - vn * 6 * vs) / 2, y + 12, val, vs, vc);
+}
+
+static void DrawStats(int tx)
+{
+    if (gPortView) return;
+    unsigned cur[4] = { sScoreLo, sScoreHi, (unsigned)sLives, (unsigned)sCoins };
+    if (!memcmp(cur, sShown, sizeof cur)) return;
+    memcpy(sShown, cur, sizeof cur);
+    for (int y = 50; y < 200; y++) memcpy(sTop + y * TW, sTopBg + y * TW, tx * 2);
+    char b[16];
+    unsigned long long sc = (unsigned long long)sScoreHi * 100000000ull + sScoreLo;
+    int n = 0; char rev[16];
+    do { rev[n++] = (char)('0' + sc % 10); sc /= 10; } while (sc);
+    for (int i = 0; i < n; i++) b[i] = rev[n - 1 - i];
+    b[n] = 0;
+    StatText("SCORE", b, 56, tx, gPortField);
+    b[0] = (char)('0' + (sLives < 0 ? 0 : sLives % 10)); b[1] = 0;
+    StatText("BALLS", b, 108, tx, gPortField);
+    int c = sCoins < 0 ? 0 : sCoins;
+    b[0] = 0; n = 0;
+    if (c >= 100) b[n++] = (char)('0' + c / 100 % 10);
+    if (c >= 10) b[n++] = (char)('0' + c / 10 % 10);
+    b[n++] = (char)('0' + c % 10); b[n] = 0;
+    StatText("COINS", b, 160, tx, gPortField);
+    sDirty = 2;
 }
 
 // Draws the table into the panel images and returns nothing; the margins are
@@ -116,6 +176,11 @@ void LayoutFrame(const u16 *tall)
         sPaintedField = gPortField;
         Paint();
         sDirty = 2;                    // the top screen is double buffered
+    }
+    {
+        int tx, tw, bx, bw;
+        LayoutTableCols(&tx, &tw, &bx, &bw);
+        DrawStats(tx);
     }
     if (!gPortView) {
         for (int y = 0; y < PH; y++) {

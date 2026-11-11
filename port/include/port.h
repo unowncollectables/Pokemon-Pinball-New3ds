@@ -85,6 +85,7 @@ void PlatPresentTall(const u16 *fb);   // GBA_W x TALL_H RGB565
 extern int gPortView;                 // 0 = 1:1 with side panels, 1 = zoomed and following the ball
 const u16 *LayoutTop(void);           // 400x240, row-major
 const u16 *LayoutBot(void);           // 320x240, row-major
+void LayoutStats(unsigned scoreLo, unsigned scoreHi, int lives, int coins);
 void LayoutFrame(const u16 *tall);
 void LayoutTableCols(int *topX0, int *topW, int *botX0, int *botW);
 int  LayoutMarginsDirty(void);
