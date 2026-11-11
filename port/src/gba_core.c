@@ -208,6 +208,7 @@ void GbaDmaSet(int num, const void *src, void *dest, unsigned int control)
     static u32 sLatch;
     if ((uintptr_t)src < 0x4000) { src = &sLatch; sctl = 2; }
     src = GbaXlat(src); dest = GbaXlat(dest);
+    u32 nbytes = count * ((hi & 0x0400) ? 4 : 2);
     if (hi & 0x0400) {
         if (count) sLatch = sctl == 0 ? ((const u32 *)src)[count - 1] : *(const u32 *)src;
     } else if (count) {
@@ -231,6 +232,7 @@ void GbaDmaSet(int num, const void *src, void *dest, unsigned int control)
             if (dctl == 0 || dctl == 3) d++; else if (dctl == 1) d--;
         }
     }
+    PpuNoteTileWrite(dest, src, nbytes);
     IO32(base + 8) = control & ~0x80000000u;   // immediate transfers finish at once
 }
 

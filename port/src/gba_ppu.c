@@ -708,6 +708,63 @@ INL void FastBgT(Ctx *c, int n, int y, int track, int world)
     }
 }
 
+// ---- Board lights ----------------------------------------------------------
+// The game lights its lamps, arrows and letters by copying small tile pictures
+// into the board's streaming window in video memory. That window holds only 22
+// of the board's tile rows (a row's slot is shared by rows 22 apart), but the
+// tall view draws the whole board from the picture buffers, so those copies
+// would never be seen. Every such copy is therefore noted here, assigned to the
+// board row whose own picture it resembles most, and used in place of the
+// buffer's tile when the layer is drawn.
+#define LIGHT_ROWS 64
+static struct { u8 on; u8 data[32]; } sLight[LIGHT_ROWS][32];
+static s8 sLightRow[704];              // per window tile: the board row it was assigned to (-1: none yet)
+static u32 sLightVer;
+
+void PpuLightReset(void)
+{
+    memset(sLight, 0, sizeof sLight);
+    memset(sLightRow, -1, sizeof sLightRow);
+    sLightVer++;
+}
+
+static const u8 *BoardTile(int trow, int col)
+{
+    return (trow < 32 ? gBoardBGTileBuffer + trow * 0x400 : gBoardBGTileBufferAlt + (trow - 32) * 0x400) + col * 32;
+}
+
+void PpuNoteTileWrite(const void *dest, const void *src, u32 bytes)
+{
+    static int first = 1;
+    if (first) { memset(sLightRow, -1, sizeof sLightRow); first = 0; }
+    const u8 *d = dest, *sr = src;
+    if (d < gGbaVram + 0x8000 || d >= gGbaVram + 0x8000 + 704 * 32 || bytes > 0x400) return;
+    if ((sr >= gBoardBGTileBuffer && sr < gBoardBGTileBuffer + 0x8000) ||
+        (sr >= gBoardBGTileBufferAlt && sr < gBoardBGTileBufferAlt + 0x8000)) return;   // the streamer itself
+    u32 t0 = (u32)(d - (gGbaVram + 0x8000)) / 32;
+    for (u32 i = 0; i * 32 < bytes && t0 + i < 704; i++) {
+        u32 t = t0 + i, slot = t >> 5, col = t & 31;
+        const u8 *w = d + i * 32;
+        int row = sLightRow[t];
+        if (row < 0) {
+            int best = -1, bestEq = 15;
+            for (int r = ((int)slot + 12) % 22; r < LIGHT_ROWS; r += 22) {
+                const u8 *b = BoardTile(r, col);
+                int eq = 0;
+                for (int k = 0; k < 32; k++) eq += b[k] == w[k];
+                if (eq > bestEq) { bestEq = eq; best = r; }
+            }
+            if (best < 0) continue;
+            sLightRow[t] = (s8)(row = best);
+        }
+        if (!sLight[row][col].on || memcmp(sLight[row][col].data, w, 32)) {
+            memcpy(sLight[row][col].data, w, 32);
+            sLight[row][col].on = 1;
+            sLightVer++;
+        }
+    }
+}
+
 // ---- Cached world layers --------------------------------------------------
 // BG1-BG3 hold the board itself; they change a few times a minute (palette
 // aside), so each is kept as one tall image of palette indices and only
@@ -715,6 +772,7 @@ INL void FastBgT(Ctx *c, int n, int y, int track, int world)
 typedef struct {
     int valid;
     u16 cnt, hofs;
+    u32 lightVer;
     u8 xmin[TALL_H], xmax[TALL_H];     // painted span of each row (xmin >= xmax: nothing)
     u8 map[0x2000];
     u8 chr[0x10000];                   // copy of the tile pictures the layer depends on
@@ -746,11 +804,11 @@ static int LayerDirty(int n)
     const u8 *map = gGbaVram + ((cnt >> 8) & 0x1F) * 0x800;
     const u8 *c0, *c1; u32 l0, l1;
     LayerSources(n, cnt, &c0, &l0, &c1, &l1);
-    int dirty = !L->valid || cnt != L->cnt || hofs != L->hofs || (cnt & 0x80) ||
+    int dirty = !L->valid || cnt != L->cnt || hofs != L->hofs || (cnt & 0x80) || (n == 3 && L->lightVer != sLightVer) ||
                 memcmp(L->map, map, maplen) || memcmp(L->chr, c0, l0) || (l1 && memcmp(L->chr + l0, c1, l1));
     if (dirty) {
         memcpy(L->map, map, maplen); memcpy(L->chr, c0, l0); if (l1) memcpy(L->chr + l0, c1, l1);
-        L->cnt = cnt; L->hofs = hofs; L->chrLen = l0 + l1;
+        L->cnt = cnt; L->hofs = hofs; L->chrLen = l0 + l1; L->lightVer = sLightVer;
     }
     return dirty;
 }
@@ -784,6 +842,7 @@ static void BuildLayerRow(int n, int R, u8 *out, u8 *xmin, u8 *xmax)
         if (board && tile < 704) {
             if ((tile >> 5) != (trow + 10) % 22 || (tile & 31) != col) continue;
             src = (trow < 32 ? gBoardBGTileBuffer + trow * 0x400 : gBoardBGTileBufferAlt + (trow - 32) * 0x400) + col * 32 + ln * 4;
+            if (trow < LIGHT_ROWS && sLight[trow][col].on) src = sLight[trow][col].data + ln * 4;
         } else {
             u32 off = chrBase + tile * 32 + ln * 4;
             if (off + 4 > 0x10000) continue;
