@@ -21,6 +21,8 @@ static int sPaintedView = -1, sPaintedField = -1;
 static int sMode = 1;                  // 1 = tall table, 0 = a 240x160 screen (menus, bonus stages)
 static int sDirty;                     // frames for which the margins still have to be copied to the panels
 static int sR0;                        // zoomed view: first board row shown, scaled by 16
+static float sCam, sCamVel, sBallVel;  // camera position (board rows), its speed, and the ball's speed
+static int sLastBall = -1, sSnap = 1;  // sSnap: jump to the target instead of gliding
 
 const u16 *LayoutTop(void) { return sTop; }
 const u16 *LayoutBot(void) { return sBot; }
@@ -129,7 +131,7 @@ done:
 }
 
 // Number panel on the left top strip (1:1 view only): score, balls and coins, drawn in code.
-static void StatText(const char *label, const char *val, int y, int sw, int field)
+static void StatText(const char *label, const char *val, int y, int sw, int field, int x0)
 {
     int ln = (int)strlen(label), vn = (int)strlen(val);
     u16 lc = field == 0 ? Rgb(255, 190, 160) : Rgb(170, 215, 255), vc = Rgb(255, 255, 255);
@@ -137,32 +139,48 @@ static void StatText(const char *label, const char *val, int y, int sw, int fiel
     int vs = (sw - 10) / (vn * 6);
     if (vs < 1) vs = 1;
     if (vs > 3) vs = 3;
-    Text(sTop, TW, (sw - ln * 6 * ls) / 2, y, label, ls, lc);
-    Text(sTop, TW, (sw - vn * 6 * vs) / 2, y + 12, val, vs, vc);
+    Text(sTop, TW, x0 + (sw - ln * 6 * ls) / 2, y, label, ls, lc);
+    Text(sTop, TW, x0 + (sw - vn * 6 * vs) / 2, y + 12, val, vs, vc);
 }
 
 static void DrawStats(int tx)
 {
-    if (gPortView) return;
     unsigned cur[4] = { sScoreLo, sScoreHi, (unsigned)sLives, (unsigned)sCoins };
     if (!memcmp(cur, sShown, sizeof cur)) return;
     memcpy(sShown, cur, sizeof cur);
-    for (int y = 50; y < 200; y++) memcpy(sTop + y * TW, sTopBg + y * TW, tx * 2);
-    char b[16];
+    for (int y = 50; y < 200; y++) {
+        memcpy(sTop + y * TW, sTopBg + y * TW, tx * 2);
+        if (gPortView) memcpy(sTop + y * TW + TW - tx, sTopBg + y * TW + TW - tx, tx * 2);
+    }
+    char b[24];
     unsigned long long sc = (unsigned long long)sScoreHi * 100000000ull + sScoreLo;
-    int n = 0; char rev[16];
+    int n = 0; char rev[24];
     do { rev[n++] = (char)('0' + sc % 10); sc /= 10; } while (sc);
     for (int i = 0; i < n; i++) b[i] = rev[n - 1 - i];
     b[n] = 0;
-    StatText("SCORE", b, 56, tx, gPortField);
-    b[0] = (char)('0' + (sLives < 0 ? 0 : sLives % 10)); b[1] = 0;
-    StatText("BALLS", b, 108, tx, gPortField);
-    int c = sCoins < 0 ? 0 : sCoins;
-    b[0] = 0; n = 0;
-    if (c >= 100) b[n++] = (char)('0' + c / 100 % 10);
-    if (c >= 10) b[n++] = (char)('0' + c / 10 % 10);
-    b[n++] = (char)('0' + c % 10); b[n] = 0;
-    StatText("COINS", b, 160, tx, gPortField);
+    char bb[2] = { (char)('0' + (sLives < 0 ? 0 : sLives % 10)), 0 };
+    char cc[4]; int cn = 0, c = sCoins < 0 ? 0 : sCoins;
+    if (c >= 100) cc[cn++] = (char)('0' + c / 100 % 10);
+    if (c >= 10) cc[cn++] = (char)('0' + c / 10 % 10);
+    cc[cn++] = (char)('0' + c % 10); cc[cn] = 0;
+    if (!gPortView) {
+        StatText("SCORE", b, 56, tx, gPortField, 0);
+        StatText("BALLS", bb, 108, tx, gPortField, 0);
+        StatText("COINS", cc, 160, tx, gPortField, 0);
+    } else {
+        // the zoomed view keeps a slim readout in the 40 px margins: balls and coins left, score right
+        StatText("BALLS", bb, 56, tx, gPortField, 0);
+        StatText("COINS", cc, 108, tx, gPortField, 0);
+        u16 lc = gPortField == 0 ? Rgb(255, 190, 160) : Rgb(170, 215, 255);
+        Text(sTop, TW, TW - tx + (tx - 30) / 2, 56, "SCORE", 1, lc);
+        int groups = (n + 2) / 3, first = n - (groups - 1) * 3;   // digits in the leading group
+        int pos = 0;
+        for (int g = 0; g < groups; g++) {
+            char t[4]; int k = g ? 3 : first;
+            memcpy(t, b + pos, k); t[k] = 0; pos += k;
+            Text(sTop, TW, TW - tx + (tx - k * 6) / 2, 70 + g * 10, t, 1, Rgb(255, 255, 255));
+        }
+    }
     sDirty = 2;
     memcpy(sTopR, sTop, sizeof sTop);
 }
@@ -188,20 +206,33 @@ static void MixRows(const u16 *a, const u16 *b, u16 *d, int n, int heavyB)
     else        for (int i = 0; i < n / 2; i++) pd[i] = Avg2(pa[i], pb[i]);
 }
 
-// One panel of the following view: 180 picture rows from src become 240 rows of 320.
-typedef struct { const u16 *src; u16 *dst; int stride; } ZoomJob;
+// One panel of the following view: 240 output rows of 320 columns. Output row y shows source
+// position s16 + 12 y (1/16 source rows, 4/3 scale), blended vertically in quarters so the picture
+// scrolls smoothly instead of jumping a whole source row at a time.
+typedef struct { const u16 *src; int s16, maxRow; u16 *dst; int stride; } ZoomJob;
+static inline void MixQ(const u16 *a, const u16 *b, u16 *d, int q)    // q/4 of b
+{
+    const u32 *pa = (const u32 *)a, *pb = (const u32 *)b;
+    u32 *pd = (u32 *)d;
+    switch (q) {
+    case 0: memcpy(d, a, 640); break;
+    case 1: for (int i = 0; i < 160; i++) pd[i] = Avg2(pa[i], Avg2(pa[i], pb[i])); break;
+    case 2: for (int i = 0; i < 160; i++) pd[i] = Avg2(pa[i], pb[i]); break;
+    default: for (int i = 0; i < 160; i++) pd[i] = Avg2(pb[i], Avg2(pa[i], pb[i])); break;
+    }
+}
 static void ZoomPanel(void *arg)
 {
     const ZoomJob *j = arg;
-    u16 r[3][320] __attribute__((aligned(4)));
-    const u16 *s = j->src;
-    u16 *d = j->dst;
-    for (int g = 0; g < 60; g++, s += 3 * GBA_W, d += 4 * j->stride) {
-        Row4of3(s, r[0]); Row4of3(s + GBA_W, r[1]); Row4of3(s + 2 * GBA_W, r[2]);
-        memcpy(d, r[0], 640);
-        MixRows(r[0], r[1], d + j->stride, 320, 1);
-        MixRows(r[2], r[1], d + 2 * j->stride, 320, 1);
-        memcpy(d + 3 * j->stride, r[2], 640);
+    u16 h[2][320] __attribute__((aligned(4)));
+    int have[2] = { -1, -1 };
+    for (int y = 0; y < PH; y++) {
+        int p = j->s16 + y * 12, i = p >> 4, q = (p >> 2) & 3;
+        if (i > j->maxRow) i = j->maxRow;
+        int i1 = i + 1 > j->maxRow ? j->maxRow : i + 1;
+        if (have[i & 1] != i) { Row4of3(j->src + i * GBA_W, h[i & 1]); have[i & 1] = i; }
+        if (have[i1 & 1] != i1) { Row4of3(j->src + i1 * GBA_W, h[i1 & 1]); have[i1 & 1] = i1; }
+        MixQ(h[i & 1], h[i1 & 1], j->dst + y * j->stride, i1 == i ? 0 : q);
     }
 }
 
@@ -211,6 +242,7 @@ void LayoutFrame(const u16 *tall, const u16 *right)
 {
     if (sMode != 1 || sPaintedView != gPortView || sPaintedField != gPortField) {
         sMode = 1;
+        if (sPaintedView != gPortView) sSnap = 1;
         sPaintedView = gPortView;
         sPaintedField = gPortField;
         Paint();
@@ -230,29 +262,47 @@ void LayoutFrame(const u16 *tall, const u16 *right)
         }
         return;
     }
-    // Following view: 4/3 scale, 180 board rows per panel. The window only moves when the
-    // ball leaves the middle band, and then eases after it, so the picture rests most of the time.
-    int maxr0 = TALL_H - 360;
-    int r0 = sR0 >> 4;
-    int want = r0;
+    // Following view: 4/3 scale, 180 board rows per panel. The window only moves when the ball
+    // leaves the middle band (shifted toward where the ball is heading), and then a critically
+    // damped spring carries it there, so the picture rests most of the time and never jerks.
+    const float maxr0 = (float)(TALL_H - 361);
+    float by = (float)gPortBallY;
+    if (gPortBallY >= 0 && sLastBall >= 0) sBallVel += ((float)(gPortBallY - sLastBall) - sBallVel) * 0.25f;
+    else sBallVel = 0;
+    sLastBall = gPortBallY;
+    float want = sCam;
     if (gPortBallY < 0) want = maxr0;
-    else if (gPortBallY < r0 + 110) want = gPortBallY - 110;
-    else if (gPortBallY > r0 + 250) want = gPortBallY - 250;
+    else {
+        by += sBallVel * 10.0f;                    // look ahead
+        if (by < sCam + 110) want = by - 110;
+        else if (by > sCam + 250) want = by - 250;
+    }
     if (want < 0) want = 0;
     if (want > maxr0) want = maxr0;
-    int step = (want * 16 - sR0) / 8;
-    if (!step && want * 16 != sR0) step = want * 16 > sR0 ? 1 : -1;
-    sR0 += step;
-    r0 = sR0 >> 4;
-    ZoomJob top = { tall + r0 * GBA_W, sTop + 40, TW }, bot = { tall + (r0 + 180) * GBA_W, sBot, BW };
+    float d = want - sCam;
+    if (sSnap || d > 220 || d < -220) { sCam = want; sCamVel = 0; sSnap = 0; }   // view switch or a teleport: no glide
+    else {
+        float w = 0.14f;
+        sCamVel += w * w * d - 2 * w * sCamVel;
+        if (sCamVel > 7) sCamVel = 7;
+        if (sCamVel < -7) sCamVel = -7;
+        sCam += sCamVel;
+        if (sCam < 0) { sCam = 0; sCamVel = 0; }
+        if (sCam > maxr0) { sCam = maxr0; sCamVel = 0; }
+    }
+    sR0 = (int)(sCam * 16.0f);
+    int r0 = sR0 >> 4, fr = sR0 & 15, last = TALL_H - 1 - r0;
+    ZoomJob top = { tall + r0 * GBA_W, fr, last, sTop + 40, TW };
+    ZoomJob bot = { tall + r0 * GBA_W, fr + 240 * 12, last, sBot, BW };
     int async = PlatJobStart(ZoomPanel, &bot);
     ZoomPanel(&top);
     if (right) {
         // The right eye exists for rows 0-239 only; lower rows are on the flat part of the picture.
-        static u16 mix[GBA_W * 180];
-        for (int y = 0; y < 180; y++)
+        static u16 mix[GBA_W * 182];
+        int rows = last + 1 < 182 ? last + 1 : 182;
+        for (int y = 0; y < rows; y++)
             memcpy(mix + y * GBA_W, (r0 + y < 240 ? right : tall) + (r0 + y) * GBA_W, GBA_W * 2);
-        ZoomJob tr = { mix, sTopR + 40, TW };
+        ZoomJob tr = { mix, fr, rows - 1, sTopR + 40, TW };
         ZoomPanel(&tr);
     }
     if (async) PlatJobWait(); else ZoomPanel(&bot);
