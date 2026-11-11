@@ -325,5 +325,9 @@ void LayoutMenuFrame(const u16 *src)
         memcpy(d, r[0], 720);
         MixRows(r[0], r[1], d + TW, 360, 0);
         memcpy(d + 2 * TW, r[1], 720);
+        for (int k = 0; k < 3; k++) {          // the side strips repeat the picture's edge, mirrored, so the 400px screen is full
+            u16 *row = d + k * TW;
+            for (int i = 0; i < 20; i++) { row[-1 - i] = row[i]; row[360 + i] = row[359 - i]; }
+        }
     }
 }
