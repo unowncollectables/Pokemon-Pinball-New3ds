@@ -618,6 +618,7 @@ static u16 sTRowN[TALL_H];
 static u8 sTSemi[TALL_H];
 static unsigned sStSlow, sStRebuilt, sStSprites, sStFrames;   // diagnostics for the perf log
 static u16 sStBld, sStDisp;
+static u32 sStMain, sStWait;           // microseconds: this core's share of the drawing, and the wait for the other core
 static int sUi0 = TALL_BAND;            // first tall row of the fixed-on-screen band, set per frame by the layout
 static u8 sLineRegs[GBA_H][0x58];      // DISPCNT .. BLDY as each scanline saw them
 
@@ -1146,17 +1147,21 @@ void PpuRenderTall(u16 *dst, u16 *right, int depth)
         a.n = 1; a.t[0] = (Task){ dst, 0, 240, 0 };
         w.n = 1; w.t[0] = (Task){ dst, 240, TALL_H, 0 };
     }
+    u32 t0 = PlatTicksUs();
     int async = PlatJobStart(RunJob, &w);
     RunJob(&a);
+    u32 t1 = PlatTicksUs();
     if (async) PlatJobWait(); else RunJob(&w);
+    sStMain += t1 - t0; sStWait += PlatTicksUs() - t1;
     sIo = gGbaIo;
 }
 
 // Averages per frame since the last call, for the perf log: rows drawn on the slow blending path,
 // layer rows rebuilt, and the last blend and display control values seen on a slow row.
-void PpuStats(unsigned *slowRows, unsigned *rebuilt, unsigned *bld, unsigned *disp)
+void PpuStats(unsigned *slowRows, unsigned *rebuilt, unsigned *bld, unsigned *disp, unsigned *mainUs, unsigned *waitUs)
 {
     unsigned f = sStFrames ? sStFrames : 1;
+    *mainUs = sStMain / f; *waitUs = sStWait / f; sStMain = sStWait = 0;
     *slowRows = sStSlow / f; *rebuilt = sStRebuilt / f; *bld = sStBld; *disp = sStDisp;
     sStSlow = sStRebuilt = sStFrames = 0;
 }
