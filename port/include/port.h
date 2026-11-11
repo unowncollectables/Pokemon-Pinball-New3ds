@@ -59,6 +59,7 @@ enum { PERF_PPU, PERF_BLIT, PERF_VSYNC, PERF_SOUND, PERF_GPU, PERF_N };   // PER
 #define PERF_WINDOW 120
 void PerfAdd(int section, u32 us);
 void PpuStats(unsigned *slowRows, unsigned *rebuilt, unsigned *bld, unsigned *disp, unsigned *mainUs, unsigned *waitUs);   // per-frame averages since the last call
+void PpuLampStats(unsigned *exact, unsigned *guess, unsigned *drop);   // lamp tile writes since the last call: placed exactly, placed by guess, dropped
 void PerfFrameEnd(void);               // once per presented frame; logs every PERF_WINDOW frames
 
 // ---- Audio -----------------------------------------------------------
