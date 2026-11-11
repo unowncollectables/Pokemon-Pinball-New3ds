@@ -80,6 +80,15 @@ int  PlatPump(void);                   // 0 = quit requested
 u16  PlatKeys(void);                   // GBA KEYINPUT bit layout, 1 = pressed
 void PlatPresent(const u16 *fb);       // GBA_W x GBA_H RGB565
 void PlatPresentTall(const u16 *fb);   // GBA_W x TALL_H RGB565
+
+// Screen layouts (layout.c): the tall picture is arranged into the two panel images.
+extern int gPortView;                 // 0 = 1:1 with side panels, 1 = zoomed and following the ball
+const u16 *LayoutTop(void);           // 400x240, row-major
+const u16 *LayoutBot(void);           // 320x240, row-major
+void LayoutFrame(const u16 *tall);
+void LayoutTableCols(int *topX0, int *topW, int *botX0, int *botW);
+int  LayoutMarginsDirty(void);
+void LayoutMarginsDone(void);
 void PlatAudioQueue(const s16 *stereo, int frames, int rate);
 u32  PlatTicksMs(void);
 u32  PlatTicksUs(void);                // wrapping microsecond clock

@@ -74,7 +74,30 @@ u16 PlatKeys(void)
 
 static void DumpPpm(const u16 *fb, int h);
 void PlatPresent(const u16 *fb) { DumpPpm(fb, GBA_H); }
-void PlatPresentTall(const u16 *fb) { DumpPpm(fb, TALL_H); }
+void PlatPresentTall(const u16 *fb)
+{
+    DumpPpm(fb, TALL_H);
+    if (getenv("PORT_VIEW")) gPortView = atoi(getenv("PORT_VIEW"));
+    LayoutFrame(fb);
+    int want = sDumpEvery && gPortFrame % sDumpEvery == 0;
+    for (int i = 0; i < sNumDump; i++) if (sDump[i] == gPortFrame) want = 1;
+    if (!want || !getenv("PORT_LAYOUTDUMP")) return;
+    static const int W[2] = { 400, 320 };
+    for (int p = 0; p < 2; p++) {
+        char path[320];
+        snprintf(path, sizeof path, "%s/f%05u_%s.ppm", sOut, (unsigned)gPortFrame, p ? "bot" : "top");
+        FILE *f = fopen(path, "wb");
+        if (!f) continue;
+        const u16 *img = p ? LayoutBot() : LayoutTop();
+        fprintf(f, "P6\n%d 240\n255\n", W[p]);
+        for (int i = 0; i < W[p] * 240; i++) {
+            u16 c = img[i];
+            u8 rgb[3] = { (c >> 11) << 3 | (c >> 11) >> 2, ((c >> 5) & 63) << 2 | ((c >> 5) & 63) >> 4, (c & 31) << 3 | (c & 31) >> 2 };
+            fwrite(rgb, 1, 3, f);
+        }
+        fclose(f);
+    }
+}
 
 static void DumpPpm(const u16 *fb, int h)
 {

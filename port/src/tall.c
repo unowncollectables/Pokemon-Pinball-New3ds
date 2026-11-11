@@ -15,8 +15,11 @@ static s16 sYW[PORT_OAM_N];            // full Y written this frame, per sprite
 static u8 sYWv[PORT_OAM_N];
 
 #include <stdlib.h>
-void PortUpdateTall(int on)
+extern int gPortField, gPortBallY;
+void PortUpdateTall(int on, int field, int ballY)
 {
+    gPortField = field == 1 ? 1 : 0;
+    gPortBallY = ballY;
     static int off = -1;
     if (off < 0) off = getenv("PORT_NOTALL") != NULL;      // test switch: always the original picture
     gPortTall = on != 0 && !off;
