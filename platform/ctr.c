@@ -12,7 +12,6 @@
 u32 __stacksize__ = 0x40000;
 
 // ---- video -------------------------------------------------------------
-static u16 sLut[32768];                    // GBA BGR555 -> RGB565
 #define TOP_W 400
 #define TOP_H 240
 
@@ -29,6 +28,7 @@ static void ClearTop(void)
 
 void PlatPresent(const u16 *src)
 {
+    u32 t0 = PlatTicksUs();
     u16 w, h;
     u16 *fb = (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
     const int ox = (TOP_W - GBA_W) / 2, oy = (TOP_H - GBA_H) / 2;
@@ -36,11 +36,14 @@ void PlatPresent(const u16 *src)
     for (int x = 0; x < GBA_W; x++) {
         u16 *col = fb + (x + ox) * TOP_H + (TOP_H - 1 - oy);
         const u16 *s = src + x;
-        for (int y = 0; y < GBA_H; y++, s += GBA_W) *col-- = sLut[*s & 0x7FFF];
+        for (int y = 0; y < GBA_H; y++, s += GBA_W) *col-- = *s;
     }
     gfxFlushBuffers();
     gfxSwapBuffers();
+    u32 t1 = PlatTicksUs();
     gspWaitForVBlank();
+    PerfAdd(PERF_BLIT, t1 - t0);
+    PerfAdd(PERF_VSYNC, PlatTicksUs() - t1);
 }
 
 // ---- input -------------------------------------------------------------
@@ -159,6 +162,7 @@ void PlatLog(const char *fmt, ...)
 }
 
 u32 PlatTicksMs(void) { return (u32)osGetTime(); }
+u32 PlatTicksUs(void) { return (u32)(svcGetSystemTick() * 1000000ull / SYSCLOCK_ARM11); }
 
 void PlatShutdown(void)
 {
@@ -220,10 +224,6 @@ void PlatInit(int argc, char **argv)
     mkdir(DATA_DIR, 0777);
     sLog = fopen(DATA_DIR "/log.txt", "w");
 
-    for (int i = 0; i < 32768; i++) {
-        int r = i & 31, g = (i >> 5) & 31, b = (i >> 10) & 31;
-        sLut[i] = (r << 11) | (((g << 1) | (g >> 4)) << 5) | b;
-    }
     ClearTop();
     AudioInit();
 }
@@ -237,6 +237,13 @@ int main(int argc, char **argv)
     PlatLog("Pokemon Pinball R&S 3DS port");
     PlatLog("build %s", PORT_BUILD_ID);
     PlatLog("L/R or ZL/ZR flippers, A/B, START");
+    {
+        bool n3 = false;
+        APT_CheckNew3DS(&n3);
+        PlatLog("system: new3ds=%d heap=%uMB linear free=%uKB", (int)n3, (unsigned)(envGetHeapSize() >> 20),
+                (unsigned)(linearSpaceFree() >> 10));
+        PlatLog("perf lines below: fps, frame time, then ms per frame spent in game / ppu / blit / sound / idle (waiting for vsync)");
+    }
     PortSaveInit();
     PortAudioInit();
     AgbMain();

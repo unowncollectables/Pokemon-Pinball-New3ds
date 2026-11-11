@@ -26,6 +26,7 @@ void PlatInit(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--frames")) sMaxFrames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--out")) snprintf(sOut, sizeof sOut, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--slow-ppu")) gPpuForceSlow = 1;
         else if (!strcmp(argv[i], "--every")) sDumpEvery = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--dump")) {
             for (char *t = strtok(argv[++i], ","); t; t = strtok(NULL, ",")) sDump[sNumDump++] = atoi(t);
@@ -83,7 +84,7 @@ void PlatPresent(const u16 *fb)
     fprintf(f, "P6\n%d %d\n255\n", GBA_W, GBA_H);
     for (int i = 0; i < GBA_W * GBA_H; i++) {
         u16 c = fb[i];
-        u8 rgb[3] = { (c & 31) << 3 | (c & 31) >> 2, ((c >> 5) & 31) << 3 | ((c >> 5) & 31) >> 2, ((c >> 10) & 31) << 3 | ((c >> 10) & 31) >> 2 };
+        u8 rgb[3] = { (c >> 11) << 3 | (c >> 11) >> 2, ((c >> 5) & 63) << 2 | ((c >> 5) & 63) >> 4, (c & 31) << 3 | (c & 31) >> 2 };
         fwrite(rgb, 1, 3, f);
     }
     fclose(f);
@@ -97,6 +98,8 @@ void PlatAudioQueue(const s16 *stereo, int frames, int rate)
 }
 
 u32 PlatTicksMs(void) { return 0; }
+#include <time.h>
+u32 PlatTicksUs(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (u32)(t.tv_sec * 1000000u + t.tv_nsec / 1000); }
 
 int PlatFileRead(const char *name, void *buf, size_t size)
 {

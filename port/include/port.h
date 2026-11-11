@@ -35,8 +35,15 @@ void GbaRunFrame(void);                // one full video frame, with interrupts
 extern u32 gPortFrame;                 // frames presented so far
 
 // ---- PPU -------------------------------------------------------------
-// Renders one scanline of the current register/VRAM state as BGR555.
-void PpuRenderLine(int y, u16 *dst);
+// Renders one scanline of the current register/VRAM state.
+void PpuRenderLine(int y, u16 *dst);   // RGB565
+extern u8 gPpuForceSlow;               // test switch: use the general renderer only
+
+// ---- Frame timing (perf.c) ---------------------------------------------
+enum { PERF_PPU, PERF_BLIT, PERF_VSYNC, PERF_SOUND, PERF_N };
+#define PERF_WINDOW 120
+void PerfAdd(int section, u32 us);
+void PerfFrameEnd(void);               // once per presented frame; logs every PERF_WINDOW frames
 
 // ---- Audio -----------------------------------------------------------
 void PortAudioInit(void);
@@ -57,9 +64,10 @@ void CrashFatal(const char *fmt, ...) __attribute__((noreturn));
 void PlatInit(int argc, char **argv);
 int  PlatPump(void);                   // 0 = quit requested
 u16  PlatKeys(void);                   // GBA KEYINPUT bit layout, 1 = pressed
-void PlatPresent(const u16 *fb);       // GBA_W x GBA_H BGR555
+void PlatPresent(const u16 *fb);       // GBA_W x GBA_H RGB565
 void PlatAudioQueue(const s16 *stereo, int frames, int rate);
 u32  PlatTicksMs(void);
+u32  PlatTicksUs(void);                // wrapping microsecond clock
 int  PlatFileRead(const char *name, void *buf, size_t size);    // bytes read or -1
 int  PlatFileWrite(const char *name, const void *buf, size_t size);
 void PlatLog(const char *fmt, ...);

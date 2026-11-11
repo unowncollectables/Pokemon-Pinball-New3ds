@@ -274,7 +274,11 @@ void GbaRunFrame(void)
 {
     for (int line = 0; line < 228; line++) {
         SetLine(line);
-        if (line < GBA_H) PpuRenderLine(line, sFrame + line * GBA_W);
+        if (line < GBA_H) {
+            u32 t = PlatTicksUs();
+            PpuRenderLine(line, sFrame + line * GBA_W);
+            PerfAdd(PERF_PPU, PlatTicksUs() - t);
+        }
         u16 st = IO16(REG_DISPSTAT);
         if (line == 160 && (st & DISPSTAT_VBLANK_INTR)) GbaRaiseIrq(INTR_VBLANK);
         // The match fires at the start of the line; handlers wait for that
@@ -282,6 +286,7 @@ void GbaRunFrame(void)
         if ((st & DISPSTAT_VCOUNT_INTR) && (st & DISPSTAT_VCOUNT)) GbaRaiseIrq(INTR_VCOUNT);
         if (line == 160) {
             PlatPresent(sFrame);
+            PerfFrameEnd();
             PortAudioFrame();
             PortSaveTick();
             gPortFrame++;

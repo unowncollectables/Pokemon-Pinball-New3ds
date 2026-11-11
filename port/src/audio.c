@@ -132,8 +132,11 @@ void PortAudioInit(void)
 }
 
 // Where in its buffer the engine is about to write this frame's samples.
+static u32 sMixStart;
+
 void PortAudioBeforeMix(void)
 {
+    sMixStart = PlatTicksUs();
     const u8 *si = gGbaSoundInfoPtr;
     sPcmOffset = 0;
     if (!si) return;
@@ -165,6 +168,7 @@ void PortAudioAfterMix(void)
         sOut[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
     }
     PlatAudioQueue(sOut, OUT_SPF, OUT_RATE);
+    PerfAdd(PERF_SOUND, PlatTicksUs() - sMixStart);
 }
 
 void PortAudioFrame(void) {}
