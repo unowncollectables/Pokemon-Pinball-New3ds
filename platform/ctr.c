@@ -17,12 +17,18 @@ u32 __stacksize__ = 0x40000;
 #define BOT_W 320
 #define BOT_H 240
 
+static int sConsole = 1;                            // log lines also go to the bottom screen until the game draws
+
 static void ClearTop(void)
 {
     for (int i = 0; i < 2; i++) {
         u16 w, h;
         u8 *fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
         memset(fb, 0, (size_t)w * h * 2);
+        if (!sConsole) {                            // the bottom screen is double buffered too once the game draws
+            fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+            memset(fb, 0, (size_t)w * h * 2);
+        }
         gfxSwapBuffers();
         gspWaitForVBlank();
     }
@@ -30,7 +36,6 @@ static void ClearTop(void)
 
 // Which picture layout is on the panels: 0 = the plain 240x160 centred on the top screen, 1 = the tall table over both.
 static int sLayout;
-static int sConsole = 1;                            // log lines also go to the bottom screen until the game draws
 
 static void ClearBottom(void)
 {
@@ -41,7 +46,14 @@ static void ClearBottom(void)
 
 static void SetLayout(int layout)
 {
-    if (sConsole) { sConsole = 0; ClearBottom(); gfxFlushBuffers(); }
+    if (sConsole) {
+        // From here the game draws the bottom screen every frame: double buffer it like the top one,
+        // or the panel shows half-drawn frames (tearing).
+        sConsole = 0;
+        gfxSetDoubleBuffering(GFX_BOTTOM, true);
+        ClearTop();
+        LayoutRepaint();
+    }
     if (layout == sLayout) return;
     sLayout = layout;
     ClearTop();                                     // both buffers: nothing of the old picture may linger
@@ -188,6 +200,10 @@ int PlatPump(void)
     hidScanInput();
     if (hidKeysDown() & KEY_Y) { gPortView ^= 1; SaveView(); }
     u32 k = hidKeysHeld();
+    if ((k & KEY_SELECT) && gPortView) {    // SELECT + up/down: tune how many table rows hide behind the gap between the screens
+        if ((hidKeysDown() & KEY_DUP) && gPortSeam < 24) { gPortSeam++; SaveView(); }
+        if ((hidKeysDown() & KEY_DDOWN) && gPortSeam > 0) { gPortSeam--; SaveView(); }
+    }
     u16 g = 0;
     if (k & KEY_A) g |= 1 << 0;
     if (k & KEY_B) g |= 1 << 1;
@@ -284,7 +300,7 @@ int PlatFileWrite(const char *name, const void *buf, size_t size)
     return (int)n;
 }
 
-static void SaveView(void) { char v = gPortView ? '1' : '0'; PlatFileWrite("view.cfg", &v, 1); }
+static void SaveView(void) { char v[2] = { gPortView ? '1' : '0', (char)('A' + gPortSeam) }; PlatFileWrite("view.cfg", v, 2); }
 
 void PlatLog(const char *fmt, ...)
 {
@@ -307,6 +323,7 @@ void PlatShutdown(void)
 
 void PlatFatalScreen(const char *text)
 {
+    gfxSetDoubleBuffering(GFX_BOTTOM, false);
     consoleInit(GFX_BOTTOM, NULL);
     printf("\x1b[2J\x1b[H%s\n\nSaved to %s/crash.txt\nPress START to exit.\n", text, DATA_DIR);
     gfxFlushBuffers(); gfxSwapBuffers();
@@ -360,7 +377,7 @@ void PlatInit(int argc, char **argv)
     mkdir(DATA_DIR, 0777);
     sLog = fopen(DATA_DIR "/log.txt", "w");
 
-    { char v = 0; if (PlatFileRead("view.cfg", &v, 1) >= 0) gPortView = v == '1'; }
+    { char v[2] = { 0, 0 }; int n = PlatFileRead("view.cfg", v, 2); if (n >= 1) gPortView = v[0] == '1'; if (n >= 2 && v[1] >= 'A' && v[1] <= 'A' + 24) gPortSeam = v[1] - 'A'; }
     ClearTop();
     AudioInit();
 }

@@ -41,7 +41,7 @@ extern u32 gPortFrame;                 // frames presented so far
 #define PORT_OAM_BYTES (PORT_OAM_N * 8)
 #define PORT_WB 2048                   // Y bias the patched game adds to world sprites
 #define TALL_H 480                     // two 240-row screens, one above the other
-#define TALL_BAND 320                  // first row of the fixed-on-screen band (menus, score)
+#define TALL_BAND 280                  // default first row of the fixed-on-screen band (menus, score): centred on the bottom screen
 extern u8 gPortTall, gSnapTall;
 extern u8 gOamSnap[];
 extern s16 gOamYWSnap[];
@@ -90,10 +90,12 @@ int  PlatJobStart(void (*fn)(void *), void *arg);
 void PlatJobWait(void);                 // 3D slider, 0 (off) to 256
 
 // Screen layouts (layout.c): the tall picture is arranged into the two panel images.
+extern int gPortSeam;                 // following view: table rows hidden behind the gap between the screens (SELECT + up/down), 0-24
 extern int gPortView;                 // 0 = 1:1 with side panels, 1 = zoomed and following the ball
 const u16 *LayoutTop(void);           // 400x240, row-major
 const u16 *LayoutBot(void);           // 320x240, row-major
 void LayoutStats(unsigned scoreLo, unsigned scoreHi, int lives, int coins);
+int  LayoutCamera(void);              // once per frame before drawing: moves the camera, returns the tall row where the fixed-on-screen band is drawn
 void LayoutFrame(const u16 *tall, const u16 *right);
 void LayoutMenuFrame(const u16 *pic);   // a 240x160 picture (menus, bonus stages), scaled to fill the top screen
 const u16 *LayoutTopR(void);          // right-eye top panel, valid after LayoutFrame with a right image

@@ -273,6 +273,20 @@ static inline u16 To565(u16 c)
     return (u16)((r << 11) | (((g << 1) | (g >> 4)) << 5) | b);
 }
 
+static u32 sPalChg[8];                 // background palette entries whose colour changed since the cached layers last looked
+
+// Reads the palette again and notes which background entries now show a different colour.
+static void UpdatePal565(void)
+{
+    const u16 *pl = (const u16 *)gGbaPltt;
+    for (int i = 0; i < 512; i++) {
+        u16 c = To565(pl[i] & 0x7FFF);
+        if (i < 256 && c != sPal565[i]) sPalChg[i >> 5] |= 1u << (i & 31);
+        sPal565[i] = c;
+    }
+    memcpy(sPalShadow, gGbaPltt, sizeof sPalShadow);
+}
+
 static void RebuildSprites(void)
 {
     const u16 *oam = (const u16 *)gGbaOam;
@@ -491,11 +505,7 @@ void PpuRenderLine(int y, u16 *dst)
         for (int x = 0; x < GBA_W; x++) dst[x] = 0xFFFF;
         return;
     }
-    if (!sCacheValid || memcmp(sPalShadow, gGbaPltt, sizeof sPalShadow)) {
-        const u16 *pl = (const u16 *)gGbaPltt;
-        for (int i = 0; i < 512; i++) sPal565[i] = To565(pl[i] & 0x7FFF);
-        memcpy(sPalShadow, gGbaPltt, sizeof sPalShadow);
-    }
+    if (!sCacheValid || memcmp(sPalShadow, gGbaPltt, sizeof sPalShadow)) UpdatePal565();
     if (!sCacheValid || memcmp(sOamShadow, gGbaOam, sizeof sOamShadow)) {
         RebuildSprites();
         memcpy(sOamShadow, gGbaOam, sizeof sOamShadow);
@@ -602,11 +612,11 @@ void PpuRenderLine(int y, u16 *dst)
 // game runs a normal frame while this is drawn afterwards from the
 // registers each scanline saw, so its mid-frame register changes still work.
 // ======================================================================
-#define TALL_MASKW (PORT_OAM_N / 32)
 static Spr sTSpr[PORT_OAM_N];
-static u8 sTSprLive[PORT_OAM_N];
-static u32 sTMask[TALL_H][TALL_MASKW];
+static u16 sTRow[TALL_H][PORT_OAM_N];   // per tall row: the sprites (indices into sTSpr, lowest OAM slot first) that touch it
+static u16 sTRowN[TALL_H];
 static u8 sTSemi[TALL_H];
+static int sUi0 = TALL_BAND;            // first tall row of the fixed-on-screen band, set per frame by the layout
 static u8 sLineRegs[GBA_H][0x58];      // DISPCNT .. BLDY as each scanline saw them
 
 extern u8 gBoardBGTileBuffer[], gBoardBGTileBufferAlt[];   // the board picture, 32 tile rows each
@@ -616,9 +626,8 @@ void PpuLatchLine(int y) { memcpy(sLineRegs[y], gGbaIo, sizeof sLineRegs[y]); }
 static void RebuildSpritesTall(void)
 {
     const u16 *oam = (const u16 *)gOamSnap;
-    memset(sTMask, 0, sizeof sTMask);
+    memset(sTRowN, 0, sizeof sTRowN);
     memset(sTSemi, 0, sizeof sTSemi);
-    memset(sTSprLive, 0xFF, sizeof sTSprLive);
     int n = 0;
     for (int i = 0; i < PORT_OAM_N; i++) {
         u16 a0 = oam[i * 4], a1 = oam[i * 4 + 1], a2 = oam[i * 4 + 2];
@@ -635,7 +644,7 @@ static void RebuildSpritesTall(void)
         else oy = y8 >= 160 ? y8 - 256 : y8;
         int ox = a1 & 0x1FF; if (ox >= 240) ox -= 512;
         if (ox + bw <= 0 || ox >= GBA_W) continue;
-        int base = ui ? TALL_BAND : 0, limit = ui ? GBA_H : TALL_H;
+        int base = ui ? sUi0 : 0, limit = ui ? GBA_H : TALL_H;
         int y0 = oy < 0 ? 0 : oy, y1 = oy + bh > limit ? limit : oy + bh;
         if (y0 >= y1) continue;
         int bpp8 = a0 & 0x2000;
@@ -649,10 +658,10 @@ static void RebuildSpritesTall(void)
         sp->tile = a2 & 0x3FF;
         sp->palbase = bpp8 ? 0x100 : (0x100 | ((a2 >> 12) << 4));
         for (int y = y0; y < y1; y++) {
-            sTMask[base + y][i >> 5] |= 1u << (i & 31);
+            sTRow[base + y][sTRowN[base + y]++] = (u16)n;
             if (mode == 1) sTSemi[base + y] = 1;
         }
-        sTSprLive[i] = n++;
+        n++;
     }
 }
 
@@ -720,12 +729,15 @@ INL void FastBgT(Ctx *c, int n, int y, int track, int world)
 static struct { u8 on; u8 data[32]; } sLight[LIGHT_ROWS][32];
 static s8 sLightRow[704];              // per window tile: the board row it was assigned to (-1: none yet)
 static u32 sLightVer;
+static u8 sLightDirty[LIGHT_ROWS];     // board tile rows whose lamp pictures changed since the layer was last drawn
+static int sLightFull = 1;             // the whole layer has to be drawn again (after a reset)
 
 void PpuLightReset(void)
 {
     memset(sLight, 0, sizeof sLight);
     memset(sLightRow, -1, sizeof sLightRow);
     sLightVer++;
+    sLightFull = 1;
 }
 
 static const u8 *BoardTile(int trow, int col)
@@ -761,6 +773,7 @@ void PpuNoteTileWrite(const void *dest, const void *src, u32 bytes)
             memcpy(sLight[row][col].data, w, 32);
             sLight[row][col].on = 1;
             sLightVer++;
+            if (row < LIGHT_ROWS) sLightDirty[row] = 1;
         }
     }
 }
@@ -768,18 +781,29 @@ void PpuNoteTileWrite(const void *dest, const void *src, u32 bytes)
 // ---- Cached world layers --------------------------------------------------
 // BG1-BG3 hold the board itself; they change a few times a minute (palette
 // aside), so each is kept as one tall image of palette indices and only
-// rebuilt when its map, tile pictures or scroll change.
+// rebuilt when its map or tile pictures change. The image is stored without the
+// scroll (a row is the whole map row, followed by a copy of its first GBA_W
+// pixels so the 240-pixel window never has to wrap), so the in-game shake that
+// moves BG1-BG3 sideways costs nothing. Next to the indices each row keeps the
+// finished RGB565 pixels and the spans of non-empty pixels, so drawing a row is
+// a few copies instead of a palette lookup per pixel.
+#define LSTRIDE (512 + GBA_W)          // widest map row plus the wrap-around copy
+#define LMAXRUNS 16                    // spans kept per row; more than that and the row is drawn pixel by pixel
 typedef struct {
     int valid;
-    u16 cnt, hofs;
+    u16 cnt;
+    u16 scroll;                        // hofs & width mask of the frame being drawn
     u32 lightVer;
-    u8 xmin[TALL_H], xmax[TALL_H];     // painted span of each row (xmin >= xmax: nothing)
+    u8 nruns[TALL_H];                  // number of spans in the row, 0xFF: too many
+    u16 runs[TALL_H][LMAXRUNS][2];     // [start, end) of each run of non-empty pixels in the stored row
+    u32 used[TALL_H][8];               // which of the 256 background palette entries the row uses
     u8 map[0x2000];
     u8 chr[0x10000];                   // copy of the tile pictures the layer depends on
     u32 chrLen;
 } Layer;
 static Layer sLayer[3];
-static u8 sLayerIdx[3][TALL_H * GBA_W];
+static u8 sLayerIdx[3][TALL_H * LSTRIDE];
+static u16 sLayerPix[3][TALL_H * LSTRIDE];
 
 static void LayerSources(int n, u16 cnt, const u8 **chr0, u32 *len0, const u8 **chr1, u32 *len1)
 {
@@ -796,28 +820,78 @@ static void LayerSources(int n, u16 cnt, const u8 **chr0, u32 *len0, const u8 **
     }
 }
 
+// 0 = unchanged, 1 = draw the whole layer again, 2 = only the lamp pictures changed (see sLightDirty)
 static int LayerDirty(int n)
 {
     Layer *L = &sLayer[n - 1];
-    u16 cnt = R16(0x08 + n * 2), hofs = R16(0x10 + n * 4) & 0x1FF;
+    u16 cnt = R16(0x08 + n * 2);
     u32 maplen = (cnt >> 14) == 3 ? 0x2000 : ((cnt >> 14) ? 0x1000 : 0x800);
     const u8 *map = gGbaVram + ((cnt >> 8) & 0x1F) * 0x800;
     const u8 *c0, *c1; u32 l0, l1;
     LayerSources(n, cnt, &c0, &l0, &c1, &l1);
-    int dirty = !L->valid || cnt != L->cnt || hofs != L->hofs || (cnt & 0x80) || (n == 3 && L->lightVer != sLightVer) ||
+    int lightChange = n == 3 && L->lightVer != sLightVer;
+    int dirty = !L->valid || cnt != L->cnt || (cnt & 0x80) || (lightChange && sLightFull) ||
                 memcmp(L->map, map, maplen) || memcmp(L->chr, c0, l0) || (l1 && memcmp(L->chr + l0, c1, l1));
     if (dirty) {
         memcpy(L->map, map, maplen); memcpy(L->chr, c0, l0); if (l1) memcpy(L->chr + l0, c1, l1);
-        L->cnt = cnt; L->hofs = hofs; L->chrLen = l0 + l1; L->lightVer = sLightVer;
+        L->cnt = cnt; L->chrLen = l0 + l1; L->lightVer = sLightVer;
+        if (n == 3) { sLightFull = 0; memset(sLightDirty, 0, sizeof sLightDirty); }
+        return 1;
     }
-    return dirty;
+    if (lightChange) { L->lightVer = sLightVer; return 2; }
+    return 0;
 }
 
-// One row of a 4-bit text layer as palette indices (0 = nothing).
-static void BuildLayerRow(int n, int R, u8 *out, u8 *xmin, u8 *xmax)
+// Finishes a stored row: RGB565 pixels, spans of non-empty pixels and the palette entries it uses.
+static void FinishLayerRow(Layer *L, int n, int R)
 {
+    const u8 *idx = sLayerIdx[n - 1] + R * LSTRIDE;
+    u16 *pix = sLayerPix[n - 1] + R * LSTRIDE;
+    u32 W = (((L->cnt >> 14) & 1) ? 512 : 256) + GBA_W;
+    u32 *used = L->used[R];
+    u16 (*runs)[2] = L->runs[R];
+    int nr = 0, start = -1;
+    memset(used, 0, sizeof L->used[R]);
+    for (u32 j = 0; j < W; j++) {
+        u32 v = idx[j];
+        if (v) {
+            pix[j] = sPal565[v];
+            used[v >> 5] |= 1u << (v & 31);
+            if (start < 0) start = (int)j;
+        } else if (start >= 0) {
+            if (nr < LMAXRUNS) { runs[nr][0] = (u16)start; runs[nr][1] = (u16)j; }
+            nr++; start = -1;
+        }
+    }
+    if (start >= 0) {
+        if (nr < LMAXRUNS) { runs[nr][0] = (u16)start; runs[nr][1] = (u16)W; }
+        nr++;
+    }
+    L->nruns[R] = nr > LMAXRUNS ? 0xFF : (u8)nr;
+}
+
+// New palette colours: draw again the stored rows that use an entry that changed.
+static void RefreshLayerColours(Layer *L, int n)
+{
+    const u8 *idxBase = sLayerIdx[n - 1];
+    u16 *pixBase = sLayerPix[n - 1];
+    u32 W = (((L->cnt >> 14) & 1) ? 512 : 256) + GBA_W;
+    for (int R = 0; R < TALL_H; R++) {
+        const u32 *u = L->used[R];
+        if (!((u[0] & sPalChg[0]) | (u[1] & sPalChg[1]) | (u[2] & sPalChg[2]) | (u[3] & sPalChg[3]) |
+              (u[4] & sPalChg[4]) | (u[5] & sPalChg[5]) | (u[6] & sPalChg[6]) | (u[7] & sPalChg[7]))) continue;
+        const u8 *idx = idxBase + R * LSTRIDE;
+        u16 *pix = pixBase + R * LSTRIDE;
+        for (u32 j = 0; j < W; j++) if (idx[j]) pix[j] = sPal565[idx[j]];
+    }
+}
+
+// One row of a 4-bit text layer as palette indices (0 = nothing), the whole map row without scroll.
+static void BuildLayerRow(int n, int R)
+{
+    Layer *L = &sLayer[n - 1];
+    u8 *out = sLayerIdx[n - 1] + R * LSTRIDE;
     u16 cnt = R16(0x08 + n * 2);
-    u32 hofs = R16(0x10 + n * 4) & 0x1FF;
     u32 chrBase = ((cnt >> 2) & 3) * 0x4000;
     const u16 *map = (const u16 *)(gGbaVram + ((cnt >> 8) & 0x1F) * 0x800);
     int size = cnt >> 14;
@@ -828,12 +902,8 @@ static void BuildLayerRow(int n, int R, u8 *out, u8 *xmin, u8 *xmax)
     row += ((sy & 0xFF) >> 3) * 32;
     u32 ty = sy & 7, trow = sy >> 3;
     int board = n == 3;
-    u8 line[GBA_W + 16];
-    memset(line, 0, sizeof line);
-    u32 sx = hofs & wmask;
-    int x = -(int)(sx & 7);
-    sx &= ~7u;
-    for (; x < GBA_W; x += 8, sx = (sx + 8) & wmask) {
+    memset(out, 0, (wmask + 1) + GBA_W);
+    for (u32 sx = 0; sx <= wmask; sx += 8) {
         u32 col = (sx & 0xFF) >> 3;
         u16 e = row[col + ((sx >= 256) ? 0x400 : 0)];
         u32 ln = (e & 0x800) ? 7 - ty : ty;
@@ -855,29 +925,39 @@ static void BuildLayerRow(int n, int R, u8 *out, u8 *xmin, u8 *xmax)
         u8 pal = (u8)((e >> 12) << 4);
         for (int i = 0; i < 8; i++) {
             u32 v = (bits >> (i * 4)) & 15;
-            if (v) line[8 + x + i] = pal | v;
+            if (v) out[sx + i] = pal | v;
         }
     }
-    memcpy(out, line + 8, GBA_W);
-    int a = 0, b = GBA_W;
-    while (a < b && !out[a]) a++;
-    while (b > a && !out[b - 1]) b--;
-    *xmin = (u8)a; *xmax = (u8)b;
+    memcpy(out + wmask + 1, out, GBA_W);        // the wrap-around copy
+    L->cnt = cnt;
+    FinishLayerRow(L, n, R);
 }
 
 static void RefreshLayers(void)
 {
+    int palChanged = 0;
+    for (int i = 0; i < 8; i++) palChanged |= sPalChg[i] != 0;
     for (int n = 1; n <= 3; n++) {
         sIo = sLineRegs[0];
         static int off = -1;
         if (off < 0) off = getenv("PORT_NOCACHE") != NULL;     // test switch: draw the layers directly
         if (off || !(R16(0) & (0x100 << n)) || (R16(0x08 + n * 2) & 0x80)) { sLayer[n - 1].valid = 0; continue; }
-        if (!LayerDirty(n)) continue;
         Layer *L = &sLayer[n - 1];
-        for (int R = 0; R < TALL_H; R++)
-            BuildLayerRow(n, R, sLayerIdx[n - 1] + R * GBA_W, &L->xmin[R], &L->xmax[R]);
-        L->valid = 1;
+        L->scroll = (u16)(R16(0x10 + n * 4) & (((R16(0x08 + n * 2) >> 14) & 1) ? 0x1FF : 0xFF));
+        int d = LayerDirty(n);
+        if (d == 1) {
+            for (int R = 0; R < TALL_H; R++) BuildLayerRow(n, R);
+            L->valid = 1;
+        } else if (d == 2) {           // blinking lamps: redraw only the tile rows they sit in
+            for (int tr = 0; tr < LIGHT_ROWS; tr++) {
+                if (!sLightDirty[tr]) continue;
+                sLightDirty[tr] = 0;
+                for (int R = tr * 8; R < tr * 8 + 8 && R < TALL_H; R++) BuildLayerRow(n, R);
+            }
+        }
+        if (palChanged) RefreshLayerColours(L, n);
     }
+    memset(sPalChg, 0, sizeof sPalChg);
     sIo = gGbaIo;
 }
 
@@ -886,14 +966,26 @@ static void RefreshLayers(void)
 INL void OverlayLayer(Ctx *c, int n, int R, int track)
 {
     const Layer *L = &sLayer[n - 1];
-    int a = L->xmin[R], b = L->xmax[R];
-    const u8 *idx = sLayerIdx[n - 1] + R * GBA_W;
+    int s = L->scroll;                          // the 240-pixel window starts s pixels into the stored row
+    const u8 *idx = sLayerIdx[n - 1] + R * LSTRIDE + s;
+    const u16 *pix = sLayerPix[n - 1] + R * LSTRIDE + s;
     int dx = sEyeDX[n - 1];
     if (!track) {
         u16 *lb = c->lb + 8 + dx;
-        for (int x = a; x < b; x++) { u32 v = idx[x]; if (v) lb[x] = sPal565[v]; }
+        u32 nr = L->nruns[R];
+        if (nr != 0xFF) {
+            const u16 (*runs)[2] = L->runs[R];
+            for (u32 k = 0; k < nr; k++) {
+                int lo = runs[k][0] - s, hi = runs[k][1] - s;
+                if (lo < 0) lo = 0;
+                if (hi > GBA_W) hi = GBA_W;
+                if (lo < hi) memcpy(lb + lo, pix + lo, (size_t)(hi - lo) * 2);
+            }
+        } else {
+            for (int x = 0; x < GBA_W; x++) if (idx[x]) lb[x] = pix[x];
+        }
     } else {
-        for (int x = a; x < b; x++) { u32 v = idx[x]; if (v) Px(c, 8 + dx + x, sPal565[v], n, 1); }
+        for (int x = 0; x < GBA_W; x++) { u32 v = idx[x]; if (v) Px(c, 8 + dx + x, sPal565[v], n, 1); }
     }
 }
 
@@ -904,32 +996,27 @@ INL void PaintRowT(Ctx *c, int R, int dispcnt, int track)
         bgOn[n] = (dispcnt & (0x100 << n)) != 0;
         bgPrio[n] = R16(0x08 + n * 2) & 3;
     }
-    bgOn[0] &= R >= TALL_BAND;         // the fixed layer lives in the bottom band only
+    bgOn[0] &= R >= sUi0 && R < sUi0 + 144;   // the fixed layer lives in its band only; its stock score strip (last 16 rows) is left out, the panels show those numbers
     int objOn = (dispcnt & 0x1000) != 0;
-    const u32 *mask = sTMask[R];
+    const u16 *list = sTRow[R];
+    int nsp = objOn ? sTRowN[R] : 0;
     for (int p = 3; p >= 0; p--) {
         for (int n = 3; n >= 0; n--)
             if (bgOn[n] && bgPrio[n] == p) {
-                if (n == 0) FastBgT(c, 0, R - TALL_BAND, track, 0);
+                if (n == 0) FastBgT(c, 0, R - sUi0, track, 0);
                 else if (sLayer[n - 1].valid) OverlayLayer(c, n, R, track);
                 else FastBgT(c, n, R, track, 1);
             }
-        if (!objOn) continue;
-        for (int w = TALL_MASKW - 1; w >= 0; w--) {
-            u32 m = mask[w];
-            while (m) {
-                int b = 31 - __builtin_clz(m);
-                m &= ~(1u << b);
-                const Spr *sp = &sTSpr[sTSprLive[w * 32 + b]];
-                if (sp->prio == p) { sObjDX = sp->ui ? 0 : sEyeDX[3]; FastObj(c, sp, sp->ui ? R - TALL_BAND : R, track); sObjDX = 0; }
-            }
+        for (int k = nsp - 1; k >= 0; k--) {      // highest OAM slot first: lower slots end up on top
+            const Spr *sp = &sTSpr[list[k]];
+            if (sp->prio == p) { sObjDX = sp->ui ? 0 : sEyeDX[3]; FastObj(c, sp, sp->ui ? R - sUi0 : R, track); sObjDX = 0; }
         }
     }
 }
 
 static void ComposeRowT(int R, u16 *dst)
 {
-    sIo = sLineRegs[R >= TALL_BAND ? R - TALL_BAND : 0];
+    sIo = sLineRegs[R >= sUi0 && R < sUi0 + GBA_H ? R - sUi0 : 0];
     u16 dispcnt = R16(0);
     if (dispcnt & 0x80) {
         for (int x = 0; x < GBA_W; x++) dst[x] = 0xFFFF;
@@ -1032,11 +1119,10 @@ static void RunJob(void *arg)
 void PpuRenderTall(u16 *dst, u16 *right, int depth)
 {
     sIo = gGbaIo;
+    sUi0 = LayoutCamera();
     static int palOk;
     if (!palOk || memcmp(sPalShadow, gGbaPltt, sizeof sPalShadow)) {
-        const u16 *pl = (const u16 *)gGbaPltt;
-        for (int i = 0; i < 512; i++) sPal565[i] = To565(pl[i] & 0x7FFF);
-        memcpy(sPalShadow, gGbaPltt, sizeof sPalShadow);
+        UpdatePal565();
         palOk = 1;
     }
     RebuildSpritesTall();
