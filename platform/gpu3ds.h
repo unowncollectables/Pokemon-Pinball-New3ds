@@ -10,12 +10,13 @@
 #include "port.h"
 
 // Sets the presenter up on first use. 1 = ready; 0 = not available, the caller stays on the CPU presenter
-// (also when sdmc:/3ds/pinball-rs/gpu.cfg starts with '0').
+// (also when sdmc:/3ds/pinball-rs/gpu.cfg starts with '0', or after a boot that never reached 600 good GPU frames: see gpu3ds.c).
 int  GpuInit(void);
 // Draws both screens for the tall table. LayoutPrepare() must have run for this frame.
 void GpuPresentTall(const u16 *tall, const u16 *right);
 // Waits until the last GPU frame has reached the screens, so the CPU presenter may write them again.
 void GpuIdle(void);
-void GpuShutdown(void);
+// clean = normal exit (removes the boot guard); 0 after a fatal error, so the next boot falls back to the CPU presenter.
+void GpuShutdown(int clean);
 
 #endif

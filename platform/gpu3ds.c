@@ -1,6 +1,7 @@
 // GPU presenter for the tall table: see gpu3ds.h.
 #include <3ds.h>
 #include <citro3d.h>
+#include <stdio.h>
 #include <string.h>
 #include "gpu3ds.h"
 
@@ -29,6 +30,16 @@ extern const unsigned int blit_shbin_size;
 
 typedef struct { float x, y, z, u, v; } Vtx;
 #define MAX_VERTS 96
+
+// Boot guard (the same idea as the SoulSilver port's fps_tweaks.pending): a GPU path that hangs on a console must never
+// lock the game out. gpu.pending is written before the first GPU frame and removed after GUARD_FRAMES good frames or on a
+// clean exit; a boot that finds it left over (hang, crash, power-off) uses the CPU presenter for that boot and says so.
+#define GUARD_FILE "gpu.pending"
+#define GUARD_PATH "sdmc:/3ds/pinball-rs/" GUARD_FILE
+#define GUARD_FRAMES 600
+static int sGuardFrames;                        // good frames so far; -1 once the guard is removed
+
+static void GuardRemove(void) { remove(GUARD_PATH); sGuardFrames = -1; }
 
 static int sState;                              // 0 not tried yet, 1 ready, -1 unavailable
 static C3D_RenderTarget *sTopL, *sTopR, *sBot;
@@ -69,7 +80,14 @@ int GpuInit(void)
     sState = -1;
     char c = '1';
     if (PlatFileRead("gpu.cfg", &c, 1) == 1 && c == '0') { PlatLog("gpu: off (gpu.cfg)"); return 0; }
-    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) { PlatLog("gpu: C3D_Init failed, using the CPU presenter"); return 0; }
+    if (PlatFileRead(GUARD_FILE, &c, 1) >= 0) {
+        GuardRemove();
+        PlatLog("gpu: SAFE BOOT: the last boot with the GPU presenter never reached %d frames; CPU presenter for THIS boot only", GUARD_FRAMES);
+        return 0;
+    }
+    PlatFileWrite(GUARD_FILE, "1", 1);
+    sGuardFrames = 0;
+    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) { GuardRemove(); PlatLog("gpu: C3D_Init failed, using the CPU presenter"); return 0; }
 
     sTopL = C3D_RenderTargetCreate(240, 400, GPU_RB_RGB565, -1);
     sTopR = C3D_RenderTargetCreate(240, 400, GPU_RB_RGB565, -1);
@@ -124,6 +142,7 @@ int GpuInit(void)
 fail:
     Teardown();
     C3D_Fini();
+    GuardRemove();
     return 0;
 }
 
@@ -243,22 +262,35 @@ void GpuPresentTall(const u16 *tall, const u16 *right)
     C3D_FrameDrawOn(sBot);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sUProj, &sProjBot);
     Run(bot, nb);
+    // Tearing fix (learned on hardware by the SoulSilver port): citro3d asks for the screen swap of the previous frame at the
+    // first vblank after its transfer and the display takes it one vblank later. A new transfer in that window would write the
+    // buffer that is still being scanned out (new rows at the top, old ones below). Wait until the previous present was taken.
+    u32 t3 = PlatTicksUs();
+    for (u32 w0 = t3; (gspIsPresentPending(GFX_TOP) || gspIsPresentPending(GFX_BOTTOM)) && PlatTicksUs() - w0 < 40000; )
+        svcSleepThread(250000);
+    u32 t4 = PlatTicksUs();
+    PerfAdd(PERF_VSYNC, t4 - t3);
     C3D_FrameEnd(0);
-    PerfAdd(PERF_GPU, PlatTicksUs() - t2);
+    PerfAdd(PERF_GPU, (t3 - t2) + (PlatTicksUs() - t4));
+    if (sGuardFrames >= 0 && ++sGuardFrames >= GUARD_FRAMES) { GuardRemove(); PlatLog("gpu: %d good frames, boot guard removed", GUARD_FRAMES); }
 }
 
+// Waits until citro3d's queue (the last transfer and its screen swap) is finished: an empty frame with a flush, then a vblank.
 void GpuIdle(void)
 {
     if (sState <= 0) return;
-    gspWaitForVBlank();
+    C3D_FrameBegin(0);
+    C3D_FrameEnd(GX_CMDLIST_FLUSH);
     gspWaitForVBlank();
 }
 
-void GpuShutdown(void)
+// clean = a normal exit: the boot guard goes away. A fatal error keeps it, so the next boot uses the CPU presenter.
+void GpuShutdown(int clean)
 {
     if (sState <= 0) return;
     GpuIdle();
     Teardown();
     C3D_Fini();
     sState = -1;
+    if (clean) GuardRemove();
 }

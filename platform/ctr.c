@@ -331,7 +331,7 @@ u32 PlatTicksUs(void) { return (u32)(svcGetSystemTick() * 1000000ull / SYSCLOCK_
 void PlatShutdown(void)
 {
     if (sViewSaveAt) { sViewSaveAt = 0; WriteView(); }
-    GpuShutdown();
+    GpuShutdown(1);
     if (sLog) fclose(sLog);
     if (sAudioOk) { ndspChnWaveBufClear(0); ndspExit(); linearFree(sAudioMem); }
     gfxExit();
@@ -339,7 +339,7 @@ void PlatShutdown(void)
 
 void PlatFatalScreen(const char *text)
 {
-    GpuShutdown();                                  // the text screen is drawn by the CPU
+    GpuShutdown(0);                                 // the text screen is drawn by the CPU; the boot guard stays, so the next boot is safe
     gfxSetDoubleBuffering(GFX_BOTTOM, false);
     consoleInit(GFX_BOTTOM, NULL);
     printf("\x1b[2J\x1b[H%s\n\nSaved to %s/crash.txt\nPress START to exit.\n", text, DATA_DIR);
