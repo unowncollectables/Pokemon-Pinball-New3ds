@@ -140,9 +140,9 @@ void PortOamYSub(void *o, int v);
     rsub(u, r"oamSimple->yOffset = oamData\[0\] & 0xFF;", "oamSimple->yOffset = gPortTall ? (s8)(oamData[0] & 0xFF) : (oamData[0] & 0xFF);")
     rsub(u, r"\A", "void PortOamClear(void);\n")
     rsub(p("src/main.c"), r"DmaCopy32\(3, gOamBuffer, OAM, OAM_SIZE\);", "PortOamCopy();")
-    rsub(p("src/main.c"), r"\A", "void PortOamCopy(void);\nvoid PortUpdateTall(int on);\n")
+    rsub(p("src/main.c"), r"\A", "void PortOamCopy(void);\nvoid PortUpdateTall(int on, int field, int ballY);\n")
     rsub(p("src/main.c"), r"^(\s*)gMainFuncs\[gMain.mainState\]\(\);",
-         r"\1PortUpdateTall((gMain.mainState == STATE_GAME_MAIN || gMain.mainState == STATE_GAME_IDLE) && gMain.selectedField <= FIELD_SAPPHIRE);\n\1gMainFuncs[gMain.mainState]();")
+         r"\1PortUpdateTall((gMain.mainState == STATE_GAME_MAIN || gMain.mainState == STATE_GAME_IDLE) && gMain.selectedField <= FIELD_SAPPHIRE, gMain.selectedField, ((gMain.mainState == STATE_GAME_MAIN || gMain.mainState == STATE_GAME_IDLE) && gCurrentPinballGame && gCurrentPinballGame->ball) ? gCurrentPinballGame->ball->positionQ0.y : -1);\n\1gMainFuncs[gMain.mainState]();")
 
 
 def main():

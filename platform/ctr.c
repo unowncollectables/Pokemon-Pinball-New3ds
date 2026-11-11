@@ -88,16 +88,46 @@ void PlatPresent(const u16 *src)
     PerfAdd(PERF_VSYNC, PlatTicksUs() - t1);
 }
 
-// The tall table: the upper 240 rows on the top screen, the lower 240 (flippers) on the bottom one.
+// Rotates columns [c0, c1) of a row-major panel image onto the console panel (c0 and c1 multiples of 8).
+static void BlitCols(u16 *fb, int panelW, const u16 *img, int c0, int c1)
+{
+    const int H = TOP_H;
+    for (int x0 = c0; x0 < c1; x0 += 8) {
+        u16 *col = fb + x0 * H + (H - 1);
+        const u16 *s = img + x0;
+        for (int y = 0; y < H; y++, s += panelW) {
+            u16 *d = col - y;
+            d[0] = s[0];
+            d[H] = s[1];
+            d[2 * H] = s[2];
+            d[3 * H] = s[3];
+            d[4 * H] = s[4];
+            d[5 * H] = s[5];
+            d[6 * H] = s[6];
+            d[7 * H] = s[7];
+        }
+    }
+}
+
+// The tall table, arranged by layout.c: the upper half on the top screen, the lower half on the bottom one.
 void PlatPresentTall(const u16 *src)
 {
     SetLayout(1);
     u32 t0 = PlatTicksUs();
+    LayoutFrame(src);
+    int tx, tw, bx, bw;
+    LayoutTableCols(&tx, &tw, &bx, &bw);
     u16 w, h;
     u16 *top = (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
-    Blit(top, TOP_W, TOP_H, src, TOP_H);
     u16 *bot = (u16 *)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
-    Blit(bot, BOT_W, BOT_H, src + (size_t)GBA_W * TOP_H, TALL_H - TOP_H);
+    if (LayoutMarginsDirty()) {
+        BlitCols(top, TOP_W, LayoutTop(), 0, tx);
+        BlitCols(top, TOP_W, LayoutTop(), tx + tw, TOP_W);
+        BlitCols(bot, BOT_W, LayoutBot(), 0, BOT_W);
+        LayoutMarginsDone();
+    }
+    BlitCols(top, TOP_W, LayoutTop(), tx, tx + tw);
+    BlitCols(bot, BOT_W, LayoutBot(), bx, bx + bw);
     gfxFlushBuffers();
     gfxSwapBuffers();
     u32 t1 = PlatTicksUs();
@@ -105,6 +135,8 @@ void PlatPresentTall(const u16 *src)
     PerfAdd(PERF_BLIT, t1 - t0);
     PerfAdd(PERF_VSYNC, PlatTicksUs() - t1);
 }
+
+static void SaveView(void);
 
 // ---- input -------------------------------------------------------------
 static u16 sKeys;
@@ -115,6 +147,7 @@ int PlatPump(void)
 {
     if (!aptMainLoop()) return 0;
     hidScanInput();
+    if (hidKeysDown() & KEY_Y) { gPortView ^= 1; SaveView(); }
     u32 k = hidKeysHeld();
     u16 g = 0;
     if (k & KEY_A) g |= 1 << 0;
@@ -212,6 +245,8 @@ int PlatFileWrite(const char *name, const void *buf, size_t size)
     return (int)n;
 }
 
+static void SaveView(void) { char v = gPortView ? '1' : '0'; PlatFileWrite("view.cfg", &v, 1); }
+
 void PlatLog(const char *fmt, ...)
 {
     char line[256];
@@ -286,6 +321,7 @@ void PlatInit(int argc, char **argv)
     mkdir(DATA_DIR, 0777);
     sLog = fopen(DATA_DIR "/log.txt", "w");
 
+    { char v = 0; if (PlatFileRead("view.cfg", &v, 1) >= 0) gPortView = v == '1'; }
     ClearTop();
     AudioInit();
 }
