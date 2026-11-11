@@ -40,6 +40,11 @@ Headless test build (needs `gcc-arm-linux-gnueabihf` and `qemu-user-static`):
 `make -C build/game -f ../../game.mk PRET_TOOLS=../upstream/pokepinballrs/tools`
 then run `build/pinball_headless --frames 2000 --every 100 --out out` under `qemu-arm-static`.
 
+## Build numbers
+
+`BUILD` holds the build number. Every change that reaches `main` raises it by one.
+It shows in `log.txt`, `crash.txt` and the title of the installed app, as `N` or `N-commit`.
+
 ## The two-screen table
 
 On the Ruby and Sapphire tables the whole board is drawn 1:1 across both

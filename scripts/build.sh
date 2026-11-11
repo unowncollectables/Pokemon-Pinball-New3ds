@@ -75,7 +75,9 @@ if [ "$(cat "$ROOT/build/.prepared" 2>/dev/null)" != "$KEY" ] || [ ! -d "$ROOT/b
   echo "$KEY" > "$ROOT/build/.prepared"
 fi
 
-ID=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)
+NUM=$(tr -dc 0-9 < "$ROOT/BUILD" 2>/dev/null); NUM=${NUM:-0}
+ID="$NUM"
+SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null) && ID="$NUM-$SHA"
 echo "Compiling for the 3DS (build $ID)"
 rm -f "$ROOT/build/obj-3ds/port/crash.o" "$ROOT/build/obj-3ds/platform/ctr.o"   # they carry the build id
 make -s -C "$ROOT/build/game" -f ../../game.mk PLATFORM=3ds PRET_TOOLS="$PRET/tools" BUILD_ID="$ID" -j"$JOBS"
