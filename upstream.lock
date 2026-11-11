@@ -1,0 +1,8 @@
+# What this port is built from. Nothing below is stored in this repository:
+# the build fetches both projects at exactly these commits, on your machine.
+pokepinballrs_url=https://github.com/pret/pokepinballrs
+pokepinballrs_commit=33ad42e8f2afca891831f03179820b96a3fdef6a
+agbcc_url=https://github.com/pret/agbcc
+agbcc_commit=da598c1d918402c42c0c0d7128ba14567f3175e9
+# Pokemon Pinball: Ruby & Sapphire (US). Your own dump must have this SHA-1.
+rom_sha1=9fec81ce2c5df589e0371a0bf2f92a5fe8db730b
