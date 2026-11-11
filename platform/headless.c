@@ -73,7 +73,8 @@ u16 PlatKeys(void)
 }
 
 static void DumpPpm(const u16 *fb, int h);
-void PlatPresent(const u16 *fb) { DumpPpm(fb, GBA_H); }
+static void DumpPanels(int withRight);
+void PlatPresent(const u16 *fb) { DumpPpm(fb, GBA_H); LayoutMenuFrame(fb); DumpPanels(0); }
 #include <pthread.h>
 static pthread_t sWorker;
 static pthread_mutex_t sMu = PTHREAD_MUTEX_INITIALIZER;
@@ -119,18 +120,13 @@ void PlatJobWait(void)
     pthread_mutex_unlock(&sMu);
 }
 
-int PlatDepth(void) { const char *e = getenv("PORT_DEPTH"); return e ? atoi(e) : 0; }
-
-void PlatPresentTall(const u16 *fb, const u16 *right)
+static void DumpPanels(int withRight)
 {
-    DumpPpm(fb, TALL_H);
-    if (getenv("PORT_VIEW")) gPortView = atoi(getenv("PORT_VIEW"));
-    LayoutFrame(fb, right);
     int want = sDumpEvery && gPortFrame % sDumpEvery == 0;
     for (int i = 0; i < sNumDump; i++) if (sDump[i] == gPortFrame) want = 1;
     if (!want || !getenv("PORT_LAYOUTDUMP")) return;
     static const int W[3] = { 400, 320, 400 };
-    for (int p = 0; p < (right ? 3 : 2); p++) {
+    for (int p = 0; p < (withRight ? 3 : 2); p++) {
         char path[320];
         snprintf(path, sizeof path, "%s/f%05u_%s.ppm", sOut, (unsigned)gPortFrame, p == 2 ? "topR" : p ? "bot" : "top");
         FILE *f = fopen(path, "wb");
@@ -144,6 +140,16 @@ void PlatPresentTall(const u16 *fb, const u16 *right)
         }
         fclose(f);
     }
+}
+
+int PlatDepth(void) { const char *e = getenv("PORT_DEPTH"); return e ? atoi(e) : 0; }
+
+void PlatPresentTall(const u16 *fb, const u16 *right)
+{
+    DumpPpm(fb, TALL_H);
+    if (getenv("PORT_VIEW")) gPortView = atoi(getenv("PORT_VIEW"));
+    LayoutFrame(fb, right);
+    DumpPanels(right != NULL);
 }
 
 static void DumpPpm(const u16 *fb, int h)

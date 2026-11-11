@@ -49,37 +49,24 @@ static void SetLayout(int layout)
     gfxFlushBuffers();
 }
 
-// Copies rows [row0, row0+rows) of a GBA_W-wide picture to a panel of the given size, centred.
-// The panels are stored rotated: column x, bottom-up.
-static void Blit(u16 *fb, int panelW, int panelH, const u16 *src, int rows)
-{
-    const int ox = (panelW - GBA_W) / 2, oy = (panelH - rows) / 2;
-    // Eight columns at a time: the source is read along its rows and the eight
-    // destination columns each fill one cache line, instead of one miss per pixel.
-    for (int x0 = 0; x0 < GBA_W; x0 += 8) {
-        u16 *c0 = fb + (x0 + ox) * panelH + (panelH - 1 - oy);
-        const u16 *s = src + x0;
-        for (int y = 0; y < rows; y++, s += GBA_W) {
-            u16 *d = c0 - y;
-            d[0] = s[0];
-            d[panelH] = s[1];
-            d[2 * panelH] = s[2];
-            d[3 * panelH] = s[3];
-            d[4 * panelH] = s[4];
-            d[5 * panelH] = s[5];
-            d[6 * panelH] = s[6];
-            d[7 * panelH] = s[7];
-        }
-    }
-}
+static void BlitCols(u16 *fb, int panelW, const u16 *img, int c0, int c1);
+static int s3d;                                 // stereo output is switched on
 
 void PlatPresent(const u16 *src)
 {
     SetLayout(0);
     u32 t0 = PlatTicksUs();
+    if (s3d) { s3d = 0; gfxSet3D(false); }
+    LayoutMenuFrame(src);
     u16 w, h;
-    u16 *fb = (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
-    Blit(fb, TOP_W, TOP_H, src, GBA_H);
+    u16 *top = (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+    if (LayoutMarginsDirty()) {
+        BlitCols(top, TOP_W, LayoutTop(), 0, 16);
+        BlitCols(top, TOP_W, LayoutTop(), 384, TOP_W);
+        BlitCols((u16 *)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h), BOT_W, LayoutBot(), 0, BOT_W);
+        LayoutMarginsDone();
+    }
+    BlitCols(top, TOP_W, LayoutTop(), 16, 384);
     gfxFlushBuffers();
     gfxSwapBuffers();
     u32 t1 = PlatTicksUs();
@@ -120,9 +107,8 @@ void PlatPresentTall(const u16 *src, const u16 *right)
 {
     SetLayout(1);
     u32 t0 = PlatTicksUs();
-    static int was3d;
     int on3d = right != NULL;
-    if (on3d != was3d) { was3d = on3d; gfxSet3D(on3d); LayoutRepaint(); }
+    if (on3d != s3d) { s3d = on3d; gfxSet3D(on3d); LayoutRepaint(); }
     LayoutFrame(src, right);
     int tx, tw, bx, bw;
     LayoutTableCols(&tx, &tw, &bx, &bw);

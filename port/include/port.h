@@ -93,6 +93,7 @@ const u16 *LayoutTop(void);           // 400x240, row-major
 const u16 *LayoutBot(void);           // 320x240, row-major
 void LayoutStats(unsigned scoreLo, unsigned scoreHi, int lives, int coins);
 void LayoutFrame(const u16 *tall, const u16 *right);
+void LayoutMenuFrame(const u16 *pic);   // a 240x160 picture (menus, bonus stages), scaled to fill the top screen
 const u16 *LayoutTopR(void);          // right-eye top panel, valid after LayoutFrame with a right image
 void LayoutTableCols(int *topX0, int *topW, int *botX0, int *botW);
 int  LayoutMarginsDirty(void);
