@@ -351,6 +351,12 @@ extern unsigned char gGbaPltt[], gGbaVram[], gGbaOam[], gGbaIo[], gGbaSram[];
                 elif last == "gOamBuffer" and re.match(r"^\s*\.space\s+0x400\s*$", line):
                     line = "\t.space 0x1000"       # room for 512 sprites (tall table shows them all at once)
                 out.append(f"\t.global {mm.group(1)}\n{mm.group(1)}:" if mm else line)
+        if name == "iwram":
+            # GbaXlat maps 0x03000000-0x03007FFF onto this block, and the game
+            # touches the stack/IRQ area at the top of IWRAM (0x03006C00 and up),
+            # which the symbol list stops short of. Without this pad those writes
+            # land in whatever the linker put next (the 3DS audio library's state).
+            out.append("\t.global gGbaIwramPad\ngGbaIwramPad:\n\t.space 0x2000")
         out.append(f"\t.global gGba{cap}End\ngGba{cap}End:")
         return "\n".join(out) + "\n"
 

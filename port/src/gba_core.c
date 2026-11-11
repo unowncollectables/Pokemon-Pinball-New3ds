@@ -302,6 +302,13 @@ void GbaRunFrame(void)
             PortAudioFrame();
             PortSaveTick();
             gPortFrame++;
+            {   // canary: the game must not write past the IWRAM image (see prepare.py)
+                extern u8 gGbaIwramPad[];
+                static int sPadNoted;
+                if (!sPadNoted)
+                    for (int i = 0; i < 0x2000; i += 4)
+                        if (*(u32 *)(gGbaIwramPad + i)) { PlatLog("iwram pad written at +0x%x = %08x (frame %u)", i, *(u32 *)(gGbaIwramPad + i), (unsigned)gPortFrame); sPadNoted = 1; break; }
+            }
             sLastPresentMs = PlatTicksMs();
             if (!PlatPump()) { PortSaveFlushNow(); PlatShutdown(); exit(0); }
             IO16(REG_KEYINPUT) = (~PlatKeys()) & 0x3FF;
