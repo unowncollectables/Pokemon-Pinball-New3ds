@@ -18,6 +18,8 @@ static u8 sYWv[PORT_OAM_N];
 extern int gPortField, gPortBallY;
 void PortUpdateTall(int on, int field, int ballY)
 {
+    static int sLastOn = -1, sLastField = -1;
+    if (on != sLastOn || field != sLastField) { PpuLightReset(); sLastOn = on; sLastField = field; }
     gPortField = field == 1 ? 1 : 0;
     gPortBallY = ballY;
     static int off = -1;

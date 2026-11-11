@@ -180,12 +180,6 @@ static void Row4of3(const u16 *s, u16 *d)
     }
 }
 
-// 240 source pixels to 360: every 2 become 3, the middle one blended.
-static void Row3of2(const u16 *s, u16 *d)
-{
-    for (int i = 0; i < 120; i++, s += 2, d += 3) { d[0] = s[0]; d[1] = Avg(s[0], s[1]); d[2] = s[1]; }
-}
-
 static void MixRows(const u16 *a, const u16 *b, u16 *d, int n, int heavyB)
 {
     const u32 *pa = (const u32 *)a, *pb = (const u32 *)b;
@@ -269,15 +263,35 @@ void LayoutFrame(const u16 *tall, const u16 *right)
 #define PORT_BUILD_ID "dev"
 #endif
 
-static void PaintMenuPanels(void)
+#define MENU_X 80
+#define MENU_Y 40
+static void PaintMenuPanels(int fill)
 {
-    // top margins: dark, with a soft edge toward the picture
-    for (int y = 0; y < PH; y++)
+    // top: the 240x160 picture sits at 1:1 in the middle (pixel for pixel, no scaling);
+    // everything around it is our own backdrop in the same style as the bottom panel
+    for (int y = 0; y < PH; y++) {
+        int t = y * 255 / (PH - 1);
         for (int x = 0; x < TW; x++) {
-            if (x >= 20 && x < 380) continue;
-            int d = x < 20 ? 19 - x : x - 380;
-            sTop[y * TW + x] = Rgb(18 - d / 2, 20 - d / 2, 34 - d);
+            int k = (((x + y) / 8) & 1) ? 6 : 0;
+            sTop[y * TW + x] = Rgb(16 + k, 22 + k + t / 16, 52 + k + t / 6);
         }
+    }
+    if (fill) {                        // 1.5x: the picture covers 360 of the 400 columns, a rule closes each side
+        const u16 red = Rgb(230, 70, 60), blue = Rgb(70, 130, 240);
+        for (int y = 0; y < PH; y++) { sTop[y * TW + 19] = sTop[y * TW + 380] = red; sTop[y * TW + 18] = sTop[y * TW + 381] = blue; }
+    } else {
+        const u16 red = Rgb(230, 70, 60), blue = Rgb(70, 130, 240);
+        for (int x = MENU_X - 2; x < MENU_X + GBA_W + 2; x++) {
+            sTop[(MENU_Y - 2) * TW + x] = sTop[(MENU_Y + GBA_H + 1) * TW + x] = blue;
+            sTop[(MENU_Y - 1) * TW + x] = sTop[(MENU_Y + GBA_H) * TW + x] = red;
+        }
+        for (int y = MENU_Y - 2; y < MENU_Y + GBA_H + 2; y++) {
+            sTop[y * TW + MENU_X - 2] = sTop[y * TW + MENU_X + GBA_W + 1] = blue;
+            sTop[y * TW + MENU_X - 1] = sTop[y * TW + MENU_X + GBA_W] = red;
+        }
+        Text(sTop, TW, (TW - 15 * 12) / 2, 14, "POKEMON PINBALL", 2, Rgb(255, 255, 255));
+        Text(sTop, TW, (TW - 17 * 6) / 2, 216, "RUBY AND SAPPHIRE", 1, Rgb(170, 190, 230));
+    }
     // bottom: our own information panel
     for (int y = 0; y < PH; y++) {
         int t = y * 255 / (PH - 1);
@@ -309,13 +323,19 @@ static void PaintMenuPanels(void)
     Text(sBot, BW, BW - 8 - n * 6, PH - 14, b, 1, soft);
 }
 
-// A 240x160 picture, scaled by 1.5 to 360x240 in the middle of the top screen.
+// 240 source pixels to 360: every 2 become 3, the middle one blended.
+static void Row3of2(const u16 *s, u16 *d)
+{
+    for (int i = 0; i < 120; i++, s += 2, d += 3) { d[0] = s[0]; d[1] = Avg(s[0], s[1]); d[2] = s[1]; }
+}
+
+// A 240x160 picture on the top screen at 1.5x, filling the height; our own backdrop fills the sides.
 void LayoutMenuFrame(const u16 *src)
 {
     if (sMode != 0) {
         sMode = 0;
         sPaintedView = -1;             // the table panels are painted again when play resumes
-        PaintMenuPanels();
+        PaintMenuPanels(1);
         sDirty = 2;
     }
     u16 r[2][360] __attribute__((aligned(4)));

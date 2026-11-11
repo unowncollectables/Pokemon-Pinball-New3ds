@@ -24,6 +24,8 @@ extern u8 gGbaVram[0x18000];
 extern u8 gGbaOam[0x400];
 extern u8 gGbaIo[0x400];
 extern u8 gGbaSram[0x10000];
+void PpuNoteTileWrite(const void *dest, const void *src, u32 bytes);
+void PpuLightReset(void);
 extern u8 gGbaEwram[], gGbaEwramEnd[], gGbaIwram[], gGbaIwramEnd[];
 
 #define IO16(off) (*(volatile u16 *)(gGbaIo + (off)))
