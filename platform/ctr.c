@@ -151,6 +151,8 @@ void PlatPresentTall(const u16 *src, const u16 *right)
     PerfAdd(PERF_VSYNC, PlatTicksUs() - t1);
 }
 
+static void SaveView(void);
+
 // ---- input -------------------------------------------------------------
 static u16 sKeys;
 
