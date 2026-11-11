@@ -31,8 +31,6 @@ void PortSaveTick(void)
     if (sDirty && gPortFrame - sDirtyFrame >= 3) PortSaveFlushNow();
 }
 
-const char AgbLibSramVersion[] = "SRAM_F_V102";
-
 static void ReadSram(const u8 *src, u8 *dest, u32 size) { memcpy(dest, GbaXlat(src), size); }
 static u32 VerifySram(const u8 *src, u8 *dest, u32 size)
 {

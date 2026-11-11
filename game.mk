@@ -39,23 +39,22 @@ GAME_SRCS := $(filter-out $(GAME_EXCLUDE),$(wildcard src/*.c))
 DATA_SRCS := $(wildcard data/*.s)
 PORT_SRCS := $(wildcard $(PORT)/port/src/*.c)
 
-GAME_OBJS := $(patsubst src/%.c,$(OBJ)/game/%.o,$(GAME_SRCS)) \
-             $(patsubst $(PORT)/port/game_src/%.c,$(OBJ)/gport/%.o,$(wildcard $(PORT)/port/game_src/*.c))
+GAME_OBJS := $(patsubst src/%.c,$(OBJ)/game/%.o,$(GAME_SRCS)) $(OBJ)/game/m4a_1.o
 DATA_OBJS := $(patsubst data/%.s,$(OBJ)/data/%.o,$(DATA_SRCS)) $(OBJ)/data/port_ram.o
 PORT_OBJS := $(patsubst $(PORT)/port/src/%.c,$(OBJ)/port/%.o,$(PORT_SRCS)) \
              $(patsubst $(PORT)/platform/%.c,$(OBJ)/platform/%.o,$(PLAT_SRCS))
 
 all: $(TARGET)
 
-$(shell mkdir -p $(OBJ)/gport $(OBJ)/game $(OBJ)/data $(OBJ)/port $(OBJ)/platform)
+$(shell mkdir -p $(OBJ)/game $(OBJ)/data $(OBJ)/port $(OBJ)/platform)
 
 $(OBJ)/game/%.o: src/%.c
 	$(CC) -E -iquote include $(GAMECFLAGS) $< -o $(OBJ)/game/$*.i
 	$(PREPROC) $(OBJ)/game/$*.i charmap.txt > $(OBJ)/game/$*.pp.i
 	$(CC) $(GAMECFLAGS) -c $(OBJ)/game/$*.pp.i -o $@
 
-$(OBJ)/gport/%.o: $(PORT)/port/game_src/%.c $(PORT)/port/include/port.h
-	$(CC) $(GAMECFLAGS) -std=gnu11 -Wall -iquote include -I$(PORT)/port/include -c $< -o $@
+$(OBJ)/game/m4a_1.o: src/m4a_1.s
+	$(CC) $(ARCH) -mthumb-interwork -c $< -o $@
 
 $(OBJ)/data/%.o: data/%.s
 	$(PREPROC) $< charmap.txt | $(CC) -E -P -x c -DPORT_ASM -I include - | $(CC) $(ARCH) -x assembler -c - -o $@
