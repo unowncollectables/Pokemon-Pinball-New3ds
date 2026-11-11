@@ -24,7 +24,7 @@ or other Nintendo material. You need your own dump of the US ROM
 ## Building
 
 You need Linux or WSL with devkitARM and libctru (`/opt/devkitpro`), `git`,
-`make`, `gcc`, `g++`, `python3` and `libpng-dev`, plus your own ROM.
+`make`, `gcc`, `g++`, `python3`, `jq` and `libpng-dev`, plus your own ROM.
 
     scripts/build.sh /path/to/your/pinball.gba     # -> build/pinball-rs.3dsx
     scripts/make_cia.sh /path/to/cia-tools/bin     # -> build/pinball-rs.cia (optional; needs makerom and bannertool)
