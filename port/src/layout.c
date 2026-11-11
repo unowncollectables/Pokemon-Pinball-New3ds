@@ -8,7 +8,7 @@
 #define BW 320
 #define PH 240
 
-static u16 sTop[TW * PH], sBot[BW * PH];
+static u16 sTop[TW * PH], sTopR[TW * PH], sBot[BW * PH];
 int gPortView;                         // 0 = whole table 1:1 with side panels, 1 = zoomed and following the ball
 int gPortField;                        // 0 Ruby, 1 Sapphire (set by the game each frame)
 int gPortBallY = -1;                   // ball row on the tall board, -1 when unknown
@@ -23,7 +23,9 @@ static int sR0;                        // zoomed view: first board row shown, sc
 
 const u16 *LayoutTop(void) { return sTop; }
 const u16 *LayoutBot(void) { return sBot; }
+const u16 *LayoutTopR(void) { return sTopR; }
 int LayoutMarginsDirty(void) { return sDirty > 0; }
+void LayoutRepaint(void) { sDirty = 2; memcpy(sTopR, sTop, sizeof sTop); }
 void LayoutMarginsDone(void) { if (sDirty > 0) sDirty--; }
 
 // Column range [x0, x0+w) of each panel that the table covers in the current view.
@@ -165,17 +167,19 @@ static void DrawStats(int tx)
     b[n++] = (char)('0' + c % 10); b[n] = 0;
     StatText("COINS", b, 160, tx, gPortField);
     sDirty = 2;
+    memcpy(sTopR, sTop, sizeof sTop);
 }
 
 // Draws the table into the panel images and returns nothing; the margins are
 // repainted only when the view or the table changes.
-void LayoutFrame(const u16 *tall)
+void LayoutFrame(const u16 *tall, const u16 *right)
 {
     if (sPaintedView != gPortView || sPaintedField != gPortField) {
         sPaintedView = gPortView;
         sPaintedField = gPortField;
         Paint();
         sDirty = 2;                    // the top screen is double buffered
+        memcpy(sTopR, sTop, sizeof sTop);
     }
     {
         int tx, tw, bx, bw;
@@ -185,6 +189,7 @@ void LayoutFrame(const u16 *tall)
     if (!gPortView) {
         for (int y = 0; y < PH; y++) {
             memcpy(sTop + y * TW + 80, tall + y * GBA_W, GBA_W * 2);
+            if (right) memcpy(sTopR + y * TW + 80, right + y * GBA_W, GBA_W * 2);
             memcpy(sBot + y * BW + 40, tall + (PH + y) * GBA_W, GBA_W * 2);
         }
         return;
@@ -203,5 +208,10 @@ void LayoutFrame(const u16 *tall)
         const u16 *a = tall + (r0 + sy) * GBA_W, *b = tall + (r0 + 180 + sy) * GBA_W;
         u16 *dt = sTop + y * TW + 40, *db = sBot + y * BW;
         for (int x = 0; x < 320; x++) { dt[x] = a[xmap[x]]; db[x] = b[xmap[x]]; }
+        if (right) {
+            const u16 *ar = r0 + sy < 240 ? right + (r0 + sy) * GBA_W : a;
+            u16 *dr = sTopR + y * TW + 40;
+            for (int x = 0; x < 320; x++) dr[x] = ar[xmap[x]];
+        }
     }
 }

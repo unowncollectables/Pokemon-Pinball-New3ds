@@ -258,6 +258,8 @@ void GbaRaiseIrq(u16 flag)
 // ---- Frame -----------------------------------------------------------
 static u16 sFrame[GBA_W * GBA_H];
 static u16 sTallFrame[GBA_W * TALL_H];
+static u16 sTallRight[GBA_W * 240];
+static int sDepth;
 static int sWaited;
 static u32 sLastPresentMs;
 
@@ -284,7 +286,8 @@ void GbaRunFrame(void)
         }
         if (line == 160 && tall) {
             u32 t = PlatTicksUs();
-            PpuRenderTall(sTallFrame);
+            sDepth = PlatDepth();
+            PpuRenderTall(sTallFrame, sTallRight, sDepth);
             PerfAdd(PERF_PPU, PlatTicksUs() - t);
         }
         u16 st = IO16(REG_DISPSTAT);
@@ -293,7 +296,7 @@ void GbaRunFrame(void)
         // line's HBlank, so their writes land from the next line on.
         if ((st & DISPSTAT_VCOUNT_INTR) && (st & DISPSTAT_VCOUNT)) GbaRaiseIrq(INTR_VCOUNT);
         if (line == 160) {
-            if (tall) PlatPresentTall(sTallFrame);
+            if (tall) PlatPresentTall(sTallFrame, sDepth > 0 ? sTallRight : NULL);
             else PlatPresent(sFrame);
             PerfFrameEnd();
             PortAudioFrame();

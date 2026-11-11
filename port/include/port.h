@@ -49,7 +49,7 @@ extern u8 gOamYWvSnap[];
 // Renders one scanline of the current register/VRAM state.
 void PpuRenderLine(int y, u16 *dst);   // RGB565
 void PpuLatchLine(int y);              // remembers this scanline's registers (tall mode renders after the frame)
-void PpuRenderTall(u16 *dst);          // GBA_W x TALL_H RGB565, from the latched registers
+void PpuRenderTall(u16 *dst, u16 *right, int depth);          // GBA_W x TALL_H RGB565, from the latched registers
 extern u8 gPpuForceSlow;               // test switch: use the general renderer only
 
 // ---- Frame timing (perf.c) ---------------------------------------------
@@ -79,16 +79,19 @@ void PlatInit(int argc, char **argv);
 int  PlatPump(void);                   // 0 = quit requested
 u16  PlatKeys(void);                   // GBA KEYINPUT bit layout, 1 = pressed
 void PlatPresent(const u16 *fb);       // GBA_W x GBA_H RGB565
-void PlatPresentTall(const u16 *fb);   // GBA_W x TALL_H RGB565
+void PlatPresentTall(const u16 *fb, const u16 *right);   // GBA_W x TALL_H RGB565; right = the right eye's rows 0-239, or NULL
+int  PlatDepth(void);                 // 3D slider, 0 (off) to 256
 
 // Screen layouts (layout.c): the tall picture is arranged into the two panel images.
 extern int gPortView;                 // 0 = 1:1 with side panels, 1 = zoomed and following the ball
 const u16 *LayoutTop(void);           // 400x240, row-major
 const u16 *LayoutBot(void);           // 320x240, row-major
 void LayoutStats(unsigned scoreLo, unsigned scoreHi, int lives, int coins);
-void LayoutFrame(const u16 *tall);
+void LayoutFrame(const u16 *tall, const u16 *right);
+const u16 *LayoutTopR(void);          // right-eye top panel, valid after LayoutFrame with a right image
 void LayoutTableCols(int *topX0, int *topW, int *botX0, int *botW);
 int  LayoutMarginsDirty(void);
+void LayoutRepaint(void);             // copy the margins to the panels again (a screen mode changed)
 void LayoutMarginsDone(void);
 void PlatAudioQueue(const s16 *stereo, int frames, int rate);
 u32  PlatTicksMs(void);

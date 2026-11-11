@@ -52,9 +52,9 @@ On the Ruby and Sapphire tables the whole board is drawn 1:1 across both
 screens: the top half on the upper screen, the lower half (flippers) on the
 touch screen. Layout and physics are unchanged; `tools/prepare.py` only moves
 where the game places things on screen and keeps every object active.
-Both screens are filled: our own code-drawn panels (Ruby red, Sapphire blue) sit beside the table. Press Y to switch to a zoomed 4:3 view that follows the ball; the choice is saved. The bonus stages keep the original single-screen view. Test switches for the
+Both screens are filled: our own code-drawn panels (Ruby red, Sapphire blue) sit beside the table. Move the 3D slider for stereo depth: the board, the overlay layers and the sprites sit at different depths on the top screen (slider at zero is the flat picture). Press Y to switch to a zoomed 4:3 view that follows the ball; the choice is saved. The bonus stages keep the original single-screen view. Test switches for the
 headless build: `PORT_NOTALL=1` draws the original 240x160 picture,
-`PORT_VIEW=1` and `PORT_LAYOUTDUMP=1` dump the two panel images, `PORT_NOCACHE=1` skips the background layer cache.
+`PORT_DEPTH=0..256` simulates the 3D slider (the right eye is dumped as `_topR.ppm`), `PORT_VIEW=1` and `PORT_LAYOUTDUMP=1` dump the two panel images, `PORT_NOCACHE=1` skips the background layer cache.
 
 ## On the console
 

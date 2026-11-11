@@ -110,23 +110,38 @@ static void BlitCols(u16 *fb, int panelW, const u16 *img, int c0, int c1)
 }
 
 // The tall table, arranged by layout.c: the upper half on the top screen, the lower half on the bottom one.
-void PlatPresentTall(const u16 *src)
+int PlatDepth(void)
+{
+    float v = osGet3DSliderState();
+    return v < 0.03f ? 0 : (int)(v * 256.0f);
+}
+
+void PlatPresentTall(const u16 *src, const u16 *right)
 {
     SetLayout(1);
     u32 t0 = PlatTicksUs();
-    LayoutFrame(src);
+    static int was3d;
+    int on3d = right != NULL;
+    if (on3d != was3d) { was3d = on3d; gfxSet3D(on3d); LayoutRepaint(); }
+    LayoutFrame(src, right);
     int tx, tw, bx, bw;
     LayoutTableCols(&tx, &tw, &bx, &bw);
     u16 w, h;
     u16 *top = (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+    u16 *topR = on3d ? (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_RIGHT, &w, &h) : NULL;
     u16 *bot = (u16 *)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
     if (LayoutMarginsDirty()) {
         BlitCols(top, TOP_W, LayoutTop(), 0, tx);
         BlitCols(top, TOP_W, LayoutTop(), tx + tw, TOP_W);
+        if (topR) {
+            BlitCols(topR, TOP_W, LayoutTopR(), 0, tx);
+            BlitCols(topR, TOP_W, LayoutTopR(), tx + tw, TOP_W);
+        }
         BlitCols(bot, BOT_W, LayoutBot(), 0, BOT_W);
         LayoutMarginsDone();
     }
     BlitCols(top, TOP_W, LayoutTop(), tx, tx + tw);
+    if (topR) BlitCols(topR, TOP_W, LayoutTopR(), tx, tx + tw);
     BlitCols(bot, BOT_W, LayoutBot(), bx, bx + bw);
     gfxFlushBuffers();
     gfxSwapBuffers();
@@ -135,8 +150,6 @@ void PlatPresentTall(const u16 *src)
     PerfAdd(PERF_BLIT, t1 - t0);
     PerfAdd(PERF_VSYNC, PlatTicksUs() - t1);
 }
-
-static void SaveView(void);
 
 // ---- input -------------------------------------------------------------
 static u16 sKeys;
