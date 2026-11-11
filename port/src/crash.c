@@ -9,7 +9,7 @@
 #define PORT_BUILD_ID "dev"
 #endif
 
-#define CRUMBS 16
+#define CRUMBS 24
 static char sCrumb[CRUMBS][96];
 static u32 sCrumbFrame[CRUMBS];
 static int sCrumbHead;
@@ -32,7 +32,7 @@ extern u8 gMain[] __attribute__((weak));
 
 void CrashFatal(const char *fmt, ...)
 {
-    static char text[4096];
+    static char text[6144];
     if (sInFatal) PlatFatalScreen("crash inside the crash logger");
     sInFatal = 1;
     int n = snprintf(text, sizeof text, "Pinball 3DS crash report\nbuild: %s\nframe: %u\n", PORT_BUILD_ID, (unsigned)gPortFrame);
@@ -47,6 +47,7 @@ void CrashFatal(const char *fmt, ...)
         if (sCrumb[k][0] && n < (int)sizeof text - 120)
             n += snprintf(text + n, sizeof text - n, "  [%u] %s\n", (unsigned)sCrumbFrame[k], sCrumb[k]);
     }
+    n += PortAudioDump(text + n, sizeof text - n);
     PlatFileWrite("crash.txt", text, strlen(text));
     PlatFatalScreen(text);
 }

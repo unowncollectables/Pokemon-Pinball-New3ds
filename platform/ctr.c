@@ -158,7 +158,7 @@ void PlatLog(const char *fmt, ...)
     va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
     printf("%s\n", line);
     if (sLog) { fprintf(sLog, "%s\n", line); fflush(sLog); }
-    CrashNote("%s", line);
+    if (strncmp(line, "perf:", 5)) CrashNote("%s", line);     // perf lines live in log.txt; keep the crumbs for events
 }
 
 u32 PlatTicksMs(void) { return (u32)osGetTime(); }
@@ -203,10 +203,11 @@ static void OnException(ERRF_ExceptionInfo *ex, CpuRegisters *regs)
             if (v >= (u32)__start__ && v < (u32)__end__ && (v & 3) == 0 && v < (u32)__start__ + 0x400000)
                 n += snprintf(stk + n, sizeof stk - n, "%08lx ", (unsigned long)v);
         }
-    CrashFatal("%s\npc  %08lx  lr %08lx\nsp  %08lx  far %08lx\nr0  %08lx  r1 %08lx\nr2  %08lx  r3 %08lx\nstack: %s",
+    CrashFatal("%s\npc  %08lx  lr %08lx\nsp  %08lx  far %08lx\nr0  %08lx  r1 %08lx\nr2  %08lx  r3 %08lx\nr4  %08lx  r5 %08lx\nr6  %08lx  r7 %08lx\nstack: %s",
                ex->type < 4 ? kinds[ex->type] : "exception",
                (unsigned long)regs->pc, (unsigned long)regs->lr, (unsigned long)regs->sp, (unsigned long)ex->far,
-               (unsigned long)regs->r[0], (unsigned long)regs->r[1], (unsigned long)regs->r[2], (unsigned long)regs->r[3], stk);
+               (unsigned long)regs->r[0], (unsigned long)regs->r[1], (unsigned long)regs->r[2], (unsigned long)regs->r[3],
+               (unsigned long)regs->r[4], (unsigned long)regs->r[5], (unsigned long)regs->r[6], (unsigned long)regs->r[7], stk);
 }
 
 void PlatInit(int argc, char **argv)
