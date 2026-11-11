@@ -80,7 +80,12 @@ int  PlatPump(void);                   // 0 = quit requested
 u16  PlatKeys(void);                   // GBA KEYINPUT bit layout, 1 = pressed
 void PlatPresent(const u16 *fb);       // GBA_W x GBA_H RGB565
 void PlatPresentTall(const u16 *fb, const u16 *right);   // GBA_W x TALL_H RGB565; right = the right eye's rows 0-239, or NULL
-int  PlatDepth(void);                 // 3D slider, 0 (off) to 256
+int  PlatDepth(void);
+// A second thread for splitting the picture work (the New 3DS has a spare core).
+// PlatJobStart returns 1 if fn(arg) now runs on that thread (call PlatJobWait before touching the result),
+// or 0 if there is no such thread and the caller should run it itself.
+int  PlatJobStart(void (*fn)(void *), void *arg);
+void PlatJobWait(void);                 // 3D slider, 0 (off) to 256
 
 // Screen layouts (layout.c): the tall picture is arranged into the two panel images.
 extern int gPortView;                 // 0 = 1:1 with side panels, 1 = zoomed and following the ball

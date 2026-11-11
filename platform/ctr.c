@@ -153,6 +153,44 @@ void PlatPresentTall(const u16 *src, const u16 *right)
 
 static void SaveView(void);
 
+// ---- second thread -----------------------------------------------------
+static Thread sWorker;
+static LightEvent sGo, sDone;
+static void (*sJobFn)(void *);
+static void *sJobArg;
+static volatile int sWorkerState;                 // 0 untried, 1 running, -1 unavailable
+static volatile int sQuit;
+
+static void WorkerMain(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        LightEvent_Wait(&sGo);
+        if (sQuit) return;
+        sJobFn(sJobArg);
+        LightEvent_Signal(&sDone);
+    }
+}
+
+int PlatJobStart(void (*fn)(void *), void *arg)
+{
+    if (sWorkerState == 0) {
+        LightEvent_Init(&sGo, RESET_ONESHOT);
+        LightEvent_Init(&sDone, RESET_ONESHOT);
+        s32 prio = 0x30;
+        svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+        sWorker = threadCreate(WorkerMain, NULL, 64 * 1024, prio, 2, false);   // core 2: free on the New 3DS
+        sWorkerState = sWorker ? 1 : -1;
+        PlatLog("worker thread: %s", sWorker ? "running on core 2" : "unavailable, drawing on one core");
+    }
+    if (sWorkerState < 0) return 0;
+    sJobFn = fn; sJobArg = arg;
+    LightEvent_Signal(&sGo);
+    return 1;
+}
+
+void PlatJobWait(void) { LightEvent_Wait(&sDone); }
+
 // ---- input -------------------------------------------------------------
 static u16 sKeys;
 
