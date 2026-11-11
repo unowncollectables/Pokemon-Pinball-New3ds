@@ -6,7 +6,7 @@
 # 3. rebuilds the game from it and checks the result is byte for byte your ROM
 # 4. adapts that tree (tools/prepare.py) and compiles it with the port for the 3DS
 # Result: build/pinball-rs.3dsx. Needs devkitARM + libctru (DEVKITPRO, default
-# /opt/devkitpro), git, make, gcc, g++, python3 and libpng-dev. Safe to repeat;
+# /opt/devkitpro), git, make, gcc, g++, python3, jq and libpng-dev. Safe to repeat;
 # finished stages are skipped.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -53,6 +53,11 @@ fi
 
 if [ ! -f "$UP/.pokepinballrs.built" ]; then
   echo "Rebuilding the game from the decompilation"
+  # The decompilation writes its graphics rules with jq. Without jq it leaves an empty rules file behind and then
+  # fails on a .png that does not exist, so check first and never reuse a rules file from a failed run.
+  command -v jq >/dev/null || die "the 'jq' tool is missing (install it with: sudo apt install jq)"
+  [ -f /usr/include/png.h ] || [ -f /usr/local/include/png.h ] || die "libpng-dev is missing (install it with: sudo apt install libpng-dev)"
+  rm -f "$PRET/graphics_rules_generated.mk"
   ( cd "$PRET" && make tools >"$UP/pret.log" 2>&1 && make -j"$JOBS" >>"$UP/pret.log" 2>&1 ) ||
     { tail -20 "$UP/pret.log" >&2; die "the decompilation did not build (full log: $UP/pret.log)"; }
   cmp -s "$PRET/pokepinballrs.gba" "$ROM" ||
