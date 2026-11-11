@@ -6,6 +6,7 @@
 // the part that hardware used to do: pick those samples up, synthesise the
 // four Game Boy tone channels from the sound registers, and hand the result
 // to the platform.
+#include <stdio.h>
 #include <string.h>
 #include "port.h"
 
@@ -134,8 +135,62 @@ void PortAudioInit(void)
 // Where in its buffer the engine is about to write this frame's samples.
 static u32 sMixStart;
 
+// Safety net: a track whose read pointer is garbage would crash the engine
+// on the next fetch. Catch it, log which song and track, and stop the track.
+extern u8 gMPlayInfo_BGM[], gMPlayInfo_SE1[], gMPlayInfo_SE2[], gMPlayInfo_SE3[];
+
+static void AuditTracks(void)
+{
+    static u8 *const players[4] = { gMPlayInfo_BGM, gMPlayInfo_SE1, gMPlayInfo_SE2, gMPlayInfo_SE3 };
+    static const char *const names[4] = { "BGM", "SE1", "SE2", "SE3" };
+    for (int p = 0; p < 4; p++) {
+        u8 *mp = players[p];
+        if (*(u32 *)(mp + 0x34) != 0x68736D53) continue;          // player not initialised
+        u32 n = mp[8];
+        u8 *tr = *(u8 **)(mp + 0x2C);
+        if (!tr || n > 16) continue;
+        for (u32 i = 0; i < n; i++, tr += 0x50) {
+            if (!(tr[0] & 0x80)) continue;
+            u32 cmd = *(u32 *)(tr + 0x40);
+            if (cmd >= 0x10000 && cmd < 0x04000000) continue;
+            PlatLog("audio: bad track pointer %08x (%s track %u, song header %08x, flags %02x); track stopped",
+                    cmd, names[p], (unsigned)i, (unsigned)*(u32 *)mp, tr[0]);
+            tr[0] = 0;
+        }
+    }
+}
+
+int PortAudioDump(char *dst, int cap)
+{
+    static u8 *const players[4] = { gMPlayInfo_BGM, gMPlayInfo_SE1, gMPlayInfo_SE2, gMPlayInfo_SE3 };
+    static const char *const names[4] = { "BGM", "SE1", "SE2", "SE3" };
+    int n = snprintf(dst, cap, "\nsound engine:\n");
+    for (int p = 0; p < 4 && n < cap - 200; p++) {
+        u8 *mp = players[p];
+        n += snprintf(dst + n, cap - n, "  %s song %08x status %08x tracks %u ident %08x\n", names[p],
+                      (unsigned)*(u32 *)mp, (unsigned)*(u32 *)(mp + 4), (unsigned)mp[8], (unsigned)*(u32 *)(mp + 0x34));
+        u8 *tr = *(u8 **)(mp + 0x2C);
+        u32 cnt = mp[8];
+        if (!tr || cnt > 16 || (u32)tr < 0x10000) continue;
+        for (u32 i = 0; i < cnt && n < cap - 200; i++, tr += 0x50) {
+            u32 cmd = *(u32 *)(tr + 0x40);
+            if (!(tr[0] & 0x80)) continue;
+            n += snprintf(dst + n, cap - n, "    t%u flags %02x cmd %08x\n", (unsigned)i, tr[0], (unsigned)cmd);
+            if (cmd < 0x10000 || cmd >= 0x04000000) {
+                n += snprintf(dst + n, cap - n, "    bad track bytes:");
+                for (int k = 0; k < 0x50 && n < cap - 8; k++) n += snprintf(dst + n, cap - n, "%s%02x", k % 16 ? " " : "\n     ", tr[k]);
+                n += snprintf(dst + n, cap - n, "\n    64 bytes before the track:");
+                for (int k = -0x40; k < 0 && n < cap - 8; k++) n += snprintf(dst + n, cap - n, "%s%02x", (k + 0x40) % 16 ? " " : "\n     ", tr[k]);
+                n += snprintf(dst + n, cap - n, "\n");
+            }
+        }
+    }
+    return n;
+}
+
 void PortAudioBeforeMix(void)
 {
+    AuditTracks();
     sMixStart = PlatTicksUs();
     const u8 *si = gGbaSoundInfoPtr;
     sPcmOffset = 0;

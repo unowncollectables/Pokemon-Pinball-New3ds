@@ -58,6 +58,7 @@ void PortSaveFlushNow(void);
 // ---- Crash logger ----------------------------------------------------
 void CrashInit(void);
 void CrashNote(const char *fmt, ...);  // breadcrumb ring, written out on a crash
+int PortAudioDump(char *dst, int cap);   // sound-engine state for the crash report
 void CrashFatal(const char *fmt, ...) __attribute__((noreturn));
 
 // ---- Platform --------------------------------------------------------
