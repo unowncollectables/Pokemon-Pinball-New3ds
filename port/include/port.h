@@ -1,0 +1,69 @@
+// Pinball 3DS port layer: GBA hardware model + platform interface.
+// Everything in port/ is original port code; nothing here comes from the game.
+#ifndef PORT_H
+#define PORT_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+#if defined(GUARD_GBA_TYPES_H)
+// game-side file: the game's own integer types are already in scope
+#elif defined(__3DS__)
+#include <3ds/types.h>
+#else
+typedef uint8_t u8;  typedef uint16_t u16; typedef unsigned int u32;
+typedef int8_t s8;   typedef int16_t s16;  typedef int s32;
+#endif
+
+#define GBA_W 240
+#define GBA_H 160
+
+// ---- GBA memory ------------------------------------------------------
+extern u8 gGbaPltt[0x400];
+extern u8 gGbaVram[0x18000];
+extern u8 gGbaOam[0x400];
+extern u8 gGbaIo[0x400];
+extern u8 gGbaSram[0x10000];
+extern u8 gGbaEwram[], gGbaEwramEnd[], gGbaIwram[], gGbaIwramEnd[];
+
+#define IO16(off) (*(volatile u16 *)(gGbaIo + (off)))
+#define IO32(off) (*(volatile u32 *)(gGbaIo + (off)))
+
+void *GbaXlat(const void *p);          // raw GBA bus address -> host pointer (identity otherwise)
+void GbaRaiseIrq(u16 flag);
+void GbaRunFrame(void);                // one full video frame, with interrupts
+extern u32 gPortFrame;                 // frames presented so far
+
+// ---- PPU -------------------------------------------------------------
+// Renders one scanline of the current register/VRAM state as BGR555.
+void PpuRenderLine(int y, u16 *dst);
+
+// ---- Audio -----------------------------------------------------------
+void PortAudioInit(void);
+void PortAudioFrame(void);             // called once per video frame
+
+// ---- Save ------------------------------------------------------------
+void PortSaveInit(void);
+void PortSaveMarkDirty(void);
+void PortSaveTick(void);               // flushes a dirty save once writes go quiet
+void PortSaveFlushNow(void);
+
+// ---- Crash logger ----------------------------------------------------
+void CrashInit(void);
+void CrashNote(const char *fmt, ...);  // breadcrumb ring, written out on a crash
+void CrashFatal(const char *fmt, ...) __attribute__((noreturn));
+
+// ---- Platform --------------------------------------------------------
+void PlatInit(int argc, char **argv);
+int  PlatPump(void);                   // 0 = quit requested
+u16  PlatKeys(void);                   // GBA KEYINPUT bit layout, 1 = pressed
+void PlatPresent(const u16 *fb);       // GBA_W x GBA_H BGR555
+void PlatAudioQueue(const s16 *stereo, int frames, int rate);
+u32  PlatTicksMs(void);
+int  PlatFileRead(const char *name, void *buf, size_t size);    // bytes read or -1
+int  PlatFileWrite(const char *name, const void *buf, size_t size);
+void PlatLog(const char *fmt, ...);
+void PlatFatalScreen(const char *text) __attribute__((noreturn));
+void PlatShutdown(void);
+
+#endif
