@@ -434,10 +434,14 @@ static void PaintMenuPanels(int fill)
         { "Y", "WHOLE TABLE OR FOLLOW VIEW" }, { "3D SLIDER", "DEPTH" },
     };
     for (int i = 0; i < 5; i++) {
-        int y = 80 + i * 24;
+        int y = 76 + i * 22;
         Text(sBot, BW, 24, y, rows[i][0], 2, key);
         Text(sBot, BW, 144, y + 4, rows[i][1], 1, white);
     }
+    // arcade trim: a neon frame with a bulb at every corner and along the top and bottom edges
+    for (int x = 4; x < BW - 4; x++) { sBot[4 * BW + x] = sBot[(PH - 5) * BW + x] = Rgb(70, 130, 240); sBot[5 * BW + x] = sBot[(PH - 6) * BW + x] = Rgb(230, 70, 60); }
+    for (int y = 4; y < PH - 4; y++) { sBot[y * BW + 4] = sBot[y * BW + BW - 5] = Rgb(70, 130, 240); sBot[y * BW + 5] = sBot[y * BW + BW - 6] = Rgb(230, 70, 60); }
+    Text(sBot, BW, (BW - 32 * 6) / 2, 196, "SELECT UP/DOWN SETS THE VIEW GAP", 1, soft);
     char b[40] = "BUILD ";
     int n = 6;
     for (const char *p = PORT_BUILD_ID; *p && *p != '-' && n < 38; p++) b[n++] = *p;
