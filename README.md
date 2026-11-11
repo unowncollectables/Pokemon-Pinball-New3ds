@@ -14,7 +14,8 @@ or other Nintendo material. You need your own dump of the US ROM
 | `scripts/build.sh`, `upstream.lock` | One-command build from your ROM; the pinned decomp commits |
 | `tools/prepare.py` | Copies a built pret tree to `build/game` and applies the port's exact-match patches |
 | `port/src/gba_core.c` | GBA memory regions, BIOS calls, DMA, interrupts, frame loop |
-| `port/src/gba_ppu.c` | Software picture unit (text backgrounds, sprites, blending) |
+| `port/src/gba_ppu.c` | Software picture unit (text backgrounds, sprites, blending), including the tall 240x480 renderer |
+| `port/src/tall.c` | Tall-table support: wide sprite Y tracking and the OAM snapshot |
 | `port/src/audio.c` | Audio output: picks up the engine's samples, synthesises the Game Boy tone channels |
 | `port/src/save.c`, `crash.c` | Save file and crash logger |
 | `platform/ctr.c` | 3DS front end (libctru) |
@@ -38,6 +39,16 @@ does all of this, tools included, from one window.
 Headless test build (needs `gcc-arm-linux-gnueabihf` and `qemu-user-static`):
 `make -C build/game -f ../../game.mk PRET_TOOLS=../upstream/pokepinballrs/tools`
 then run `build/pinball_headless --frames 2000 --every 100 --out out` under `qemu-arm-static`.
+
+## The two-screen table
+
+On the Ruby and Sapphire tables the whole board is drawn 1:1 across both
+screens: the top half on the upper screen, the lower half (flippers) on the
+touch screen. Layout and physics are unchanged; `tools/prepare.py` only moves
+where the game places things on screen and keeps every object active.
+The bonus stages keep the original single-screen view. Test switches for the
+headless build: `PORT_NOTALL=1` draws the original 240x160 picture,
+`PORT_NOCACHE=1` skips the background layer cache.
 
 ## On the console
 

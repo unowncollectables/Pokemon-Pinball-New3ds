@@ -24,6 +24,127 @@ def rsub(path, pattern, repl, count=1, flags=re.M):
         f.write(s2)
 
 
+# ---------------------------------------------------------------------------
+# Tall table: the whole board is shown at once (top and bottom screen), so
+# nothing may depend on where the camera is. World sprites carry a large bias
+# in their screen Y (PORT_WB): the port sees from that bias which sprites are
+# part of the table and which are fixed on-screen (menus, score).
+# ---------------------------------------------------------------------------
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def write(path, s):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(s)
+
+
+def scan_expr(s, i):
+    """Index of the ';' ending the expression that starts at i (depth 0)."""
+    depth = 0
+    while i < len(s):
+        c = s[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == ";" and depth == 0:
+            return i
+        i += 1
+    die("unterminated expression")
+
+
+def hook_oam_y(s):
+    """gOamBuffer[i].y = e;  ->  PortOamYSet(&gOamBuffer[i], (e));   (also += and the pointer forms)"""
+    ptrs = set(re.findall(r"struct OamData \*(\w+)", s))
+    out, i, n = [], 0, 0
+    head = re.compile(r"(gOamBuffer\[)|\b(" + "|".join(sorted(ptrs)) + r")->y\b" if ptrs else r"(gOamBuffer\[)")
+    while True:
+        m = head.search(s, i)
+        if not m:
+            out.append(s[i:])
+            break
+        j = m.end()
+        if m.group(1):                                   # find the matching ]
+            depth = 1
+            while depth:
+                depth += {"[": 1, "]": -1}.get(s[j], 0)
+                j += 1
+            target = "&" + s[m.start():j]
+            if not s.startswith(".y", j) or re.match(r"\w", s[j + 2:j + 3]):
+                out.append(s[i:j]); i = j; continue
+            j += 2
+        else:
+            target = m.group(2)
+        op = re.match(r"\s*(\+=|-=|=)(?!=)\s*", s[j:])
+        if not op:
+            out.append(s[i:j]); i = j; continue
+        k = j + op.end()
+        e = scan_expr(s, k)
+        fn = {"=": "PortOamYSet", "+=": "PortOamYAdd", "-=": "PortOamYSub"}[op.group(1)]
+        out.append(s[i:m.start()] + f"{fn}({target}, ({s[k:e]}))")
+        i = e
+        n += 1
+    return "".join(out), n
+
+
+def tall_patches(p):
+    g = p("include/global.h")
+    rsub(g, r"^#endif // GUARD_GLOBAL_H", """/* ---- port: tall table ---- */
+extern unsigned char gPortTall;
+void PortOamYSet(void *o, int v);
+void PortOamYAdd(void *o, int v);
+void PortOamYSub(void *o, int v);
+#define PORT_WB 2048
+#define PORT_CYO (gPortTall ? -PORT_WB : gCurrentPinballGame->cameraYOffset)
+#define PORT_CBY (gPortTall ? -PORT_WB : gCurrentPinballGame->cameraBaseY)
+#define PORT_CSO (gPortTall ? 0 : gCurrentPinballGame->cameraScrollOffset)
+#define PORT_CYA (gPortTall ? 0 : gCurrentPinballGame->cameraYAdjust)
+#define PORT_SHY (gPortTall ? 0 : gCurrentPinballGame->screenShakeY)
+#define PORT_HI(n) (gPortTall ? PORT_WB + 480 + ((n) - 160) : (n))
+#define PORT_LO(n) (gPortTall ? PORT_WB + (n) : (n))
+#endif // GUARD_GLOBAL_H""")
+
+    total_y = 0
+    for fn in sorted(os.listdir(p("src"))):
+        if not fn.endswith(".c"):
+            continue
+        path = p("src", fn)
+        t = read(path)
+        t0 = t
+        t, ny = hook_oam_y(t)
+        total_y += ny
+        # camera reads inside sprite maths (assignments to the camera itself stay)
+        t = re.sub(r"gCurrentPinballGame->cameraYOffset\b(?!\s*=[^=])", "PORT_CYO", t)
+        if fn in ("all_board_process7.c", "kecleon_process3.c"):
+            t = re.sub(r"gCurrentPinballGame->cameraBaseY\b(?!\s*[-+*]?=(?!=))", "PORT_CBY", t)
+            t = re.sub(r"gCurrentPinballGame->cameraScrollOffset\b(?!\s*[-+*]?=(?!=))", "PORT_CSO", t)
+            t = re.sub(r"gCurrentPinballGame->cameraYAdjust\b(?!\s*[-+*]?=(?!=))", "PORT_CYA", t)
+        if fn == "all_board_process7.c":
+            t = re.sub(r"gCurrentPinballGame->screenShakeY\b", "PORT_SHY", t)
+        # off-screen tests on a sprite group's baseY: the table is taller than the screen
+        t = re.sub(r"(\bbaseY\s*(?:>=|>)\s*)(1[89]0|200)\b", r"\1PORT_HI(\2)", t)
+        t = re.sub(r"(\bbaseY\s*(?:<=|<)\s*)(-\d+)\b", r"\1PORT_LO(\2)", t)
+        # entities are switched on (and drawn) only while the camera is near them: keep them all going
+        num = r"(?:0[xX][0-9a-fA-F]+|\d+)"
+        t = re.sub(r"(gCurrentPinballGame->cameraYViewport\s*[<>]\s*" + num + r")", r"(gPortTall || \1)", t)
+        t = re.sub(r"(\b" + num + r"\s*<\s*gCurrentPinballGame->cameraYViewport\b)", r"(gPortTall || \1)", t)
+        if t != t0:
+            write(path, t)
+    if total_y < 250:
+        die(f"sprite Y rewrite matched only {total_y} places")
+
+    u = p("src/util.c")
+    rsub(u, r"DmaCopy16\(3, gEmptyOamData, oamData, sizeof\(gEmptyOamData\)\);", "PortOamClear();")
+    rsub(u, r"oamSimple->yOffset = oamData\[0\] & 0xFF;", "oamSimple->yOffset = gPortTall ? (s8)(oamData[0] & 0xFF) : (oamData[0] & 0xFF);")
+    rsub(u, r"\A", "void PortOamClear(void);\n")
+    rsub(p("src/main.c"), r"DmaCopy32\(3, gOamBuffer, OAM, OAM_SIZE\);", "PortOamCopy();")
+    rsub(p("src/main.c"), r"\A", "void PortOamCopy(void);\nvoid PortUpdateTall(int on);\n")
+    rsub(p("src/main.c"), r"^(\s*)gMainFuncs\[gMain.mainState\]\(\);",
+         r"\1PortUpdateTall((gMain.mainState == STATE_GAME_MAIN || gMain.mainState == STATE_GAME_IDLE) && gMain.selectedField <= FIELD_SAPPHIRE);\n\1gMainFuncs[gMain.mainState]();")
+
+
 def main():
     src, dst = sys.argv[1], sys.argv[2]
     if os.path.exists(dst):
@@ -136,6 +257,8 @@ extern unsigned char gGbaPltt[], gGbaVram[], gGbaOam[], gGbaIo[], gGbaSram[];
             f.write(f"\t.word {lab}, {target}\n")
         f.write("\t.word 0, 0\n")
 
+    tall_patches(p)
+
     # --- RAM variables are defined once, in the layout block below; a C
     # definition with a (zero) initialiser would be a second definition.
     for fn in os.listdir(p("src")):
@@ -150,12 +273,17 @@ extern unsigned char gGbaPltt[], gGbaVram[], gGbaOam[], gGbaIo[], gGbaSram[];
     def ram(name, files):
         cap = name.capitalize()
         out = [f"\t.section .bss.{name},\"aw\",%nobits", "\t.balign 16", f"\t.global gGba{cap}", f"gGba{cap}:"]
+        last = ""
         for fn in files:
             for line in open(p(fn), encoding="utf-8"):
                 line = line.split("@")[0].rstrip()
                 if not line.strip() or ".include" in line:
                     continue
                 mm = re.match(r"^(\w+):\s*$", line)
+                if mm:
+                    last = mm.group(1)
+                elif last == "gOamBuffer" and re.match(r"^\s*\.space\s+0x400\s*$", line):
+                    line = "\t.space 0x1000"       # room for 512 sprites (tall table shows them all at once)
                 out.append(f"\t.global {mm.group(1)}\n{mm.group(1)}:" if mm else line)
         out.append(f"\t.global gGba{cap}End\ngGba{cap}End:")
         return "\n".join(out) + "\n"

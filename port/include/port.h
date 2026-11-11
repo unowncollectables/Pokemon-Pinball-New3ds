@@ -34,9 +34,22 @@ void GbaRaiseIrq(u16 flag);
 void GbaRunFrame(void);                // one full video frame, with interrupts
 extern u32 gPortFrame;                 // frames presented so far
 
+// ---- Tall table ----------------------------------------------------------
+#define PORT_OAM_N 512                 // sprites the game may use (the GBA has 128)
+#define PORT_OAM_BYTES (PORT_OAM_N * 8)
+#define PORT_WB 2048                   // Y bias the patched game adds to world sprites
+#define TALL_H 480                     // two 240-row screens, one above the other
+#define TALL_BAND 320                  // first row of the fixed-on-screen band (menus, score)
+extern u8 gPortTall, gSnapTall;
+extern u8 gOamSnap[];
+extern s16 gOamYWSnap[];
+extern u8 gOamYWvSnap[];
+
 // ---- PPU -------------------------------------------------------------
 // Renders one scanline of the current register/VRAM state.
 void PpuRenderLine(int y, u16 *dst);   // RGB565
+void PpuLatchLine(int y);              // remembers this scanline's registers (tall mode renders after the frame)
+void PpuRenderTall(u16 *dst);          // GBA_W x TALL_H RGB565, from the latched registers
 extern u8 gPpuForceSlow;               // test switch: use the general renderer only
 
 // ---- Frame timing (perf.c) ---------------------------------------------
@@ -66,6 +79,7 @@ void PlatInit(int argc, char **argv);
 int  PlatPump(void);                   // 0 = quit requested
 u16  PlatKeys(void);                   // GBA KEYINPUT bit layout, 1 = pressed
 void PlatPresent(const u16 *fb);       // GBA_W x GBA_H RGB565
+void PlatPresentTall(const u16 *fb);   // GBA_W x TALL_H RGB565
 void PlatAudioQueue(const s16 *stereo, int frames, int rate);
 u32  PlatTicksMs(void);
 u32  PlatTicksUs(void);                // wrapping microsecond clock
