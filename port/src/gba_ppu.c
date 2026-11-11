@@ -771,8 +771,14 @@ void PpuNoteTileWrite(const void *dest, const void *src, u32 bytes)
         u32 t = t0 + i, slot = t >> 5, col = t & 31;
         const u8 *w = d + i * 32;
         int row = sSlotRow[slot];            // exact: the row the streamer put in this slot
-        if (row >= 0) sStLampExact++;
-        else row = sLightRow[t];
+        if (row >= 0) {
+            // still require the picture to resemble that board tile: not every tile write here is a lamp
+            const u8 *b = BoardTile(row, col);
+            int eq = 0;
+            for (int k = 0; k < 32; k++) eq += b[k] == w[k];
+            if (eq <= 15) { sStLampDrop++; continue; }
+            sStLampExact++;
+        } else row = sLightRow[t];
         if (row < 0) {
             int best = -1, bestEq = 15;
             for (int r = ((int)slot + 12) % 22; r < LIGHT_ROWS; r += 22) {
