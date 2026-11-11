@@ -90,6 +90,7 @@ int  PlatJobStart(void (*fn)(void *), void *arg);
 void PlatJobWait(void);                 // 3D slider, 0 (off) to 256
 
 // Screen layouts (layout.c): the tall picture is arranged into the two panel images.
+extern int gPortSeam;                 // following view: table rows hidden behind the gap between the screens (SELECT + up/down), 0-24
 extern int gPortView;                 // 0 = 1:1 with side panels, 1 = zoomed and following the ball
 const u16 *LayoutTop(void);           // 400x240, row-major
 const u16 *LayoutBot(void);           // 320x240, row-major

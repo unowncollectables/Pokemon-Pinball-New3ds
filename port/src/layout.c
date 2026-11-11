@@ -9,6 +9,7 @@
 #define PH 240
 
 static u16 sTop[TW * PH], sTopR[TW * PH], sBot[BW * PH];
+int gPortSeam = 8;                     // output rows of the table hidden behind the gap between the two screens
 int gPortView;                         // 0 = whole table 1:1 with side panels, 1 = zoomed and following the ball
 int gPortField;                        // 0 Ruby, 1 Sapphire (set by the game each frame)
 int gPortBallY = -1;                   // ball row on the tall board, -1 when unknown
@@ -279,8 +280,6 @@ static void ZoomPanel(void *arg)
 }
 
 // ---- camera of the following view -------------------------------------
-#define SEAM 8      // output rows of the table hidden behind the gap between the two screens (the table runs on past it)
-#define VIEW_ROWS 366     // source rows the two panels span, gap included
 int LayoutCamera(void)
 {
     if (!gPortView || sMode != 1 || sPaintedView != gPortView) {
@@ -290,7 +289,7 @@ int LayoutCamera(void)
     // The window only moves when the ball leaves the middle band (shifted toward where the ball is
     // heading); then a critically damped spring carries it there, so the picture rests most of the
     // time and never jerks.
-    const float maxr0 = (float)(TALL_H - VIEW_ROWS - 1);
+    const float maxr0 = (float)(TALL_H - 361 - (gPortSeam * 3 + 3) / 4 - 1);
     float by = (float)gPortBallY;
     if (gPortBallY >= 0 && sLastBall >= 0) sBallVel += ((float)(gPortBallY - sLastBall) - sBallVel) * 0.25f;
     else sBallVel = 0;
@@ -358,11 +357,11 @@ void LayoutFrame(const u16 *tall, const u16 *right)
         return;
     }
     // Following view: 4/3 scale, the camera was stepped by LayoutCamera before the picture was drawn.
-    // Eight output rows are skipped between the screens, so a ball crossing the gap behind the
+    // A few output rows (gPortSeam) are skipped between the screens, so a ball crossing the gap behind the
     // hinge does not appear to jump.
     int r0 = sR0 >> 4, fr = sR0 & 15, last = TALL_H - 1 - r0, crisp = !sMoving;
     ZoomJob top = { tall + r0 * GBA_W, fr, last, sTop + 40, TW, 0, PH, crisp };
-    ZoomJob bot = { tall + r0 * GBA_W, fr + (PH + SEAM) * 12, last, sBot, BW, 0, PH, crisp };
+    ZoomJob bot = { tall + r0 * GBA_W, fr + (PH + gPortSeam) * 12, last, sBot, BW, 0, PH, crisp };
     static u16 mix[GBA_W * 184];
     ZoomJob tr1 = { mix, fr, 0, sTopR + 40, TW, 0, 120, crisp }, tr2 = { mix, fr, 0, sTopR + 40, TW, 120, PH, crisp };
     if (right) {
