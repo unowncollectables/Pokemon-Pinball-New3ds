@@ -55,7 +55,7 @@ void PpuRenderTall(u16 *dst, u16 *right, int depth);          // GBA_W x TALL_H 
 extern u8 gPpuForceSlow;               // test switch: use the general renderer only
 
 // ---- Frame timing (perf.c) ---------------------------------------------
-enum { PERF_PPU, PERF_BLIT, PERF_VSYNC, PERF_SOUND, PERF_N };
+enum { PERF_PPU, PERF_BLIT, PERF_VSYNC, PERF_SOUND, PERF_GPU, PERF_N };   // PERF_GPU: building and submitting the GPU frame (0 on the CPU presenter)
 #define PERF_WINDOW 120
 void PerfAdd(int section, u32 us);
 void PpuStats(unsigned *slowRows, unsigned *rebuilt, unsigned *bld, unsigned *disp, unsigned *mainUs, unsigned *waitUs);   // per-frame averages since the last call
@@ -98,6 +98,8 @@ const u16 *LayoutBot(void);           // 320x240, row-major
 void LayoutStats(unsigned scoreLo, unsigned scoreHi, int lives, int coins);
 int  LayoutCamera(void);              // once per frame before drawing: moves the camera, returns the tall row where the fixed-on-screen band is drawn
 void LayoutFrame(const u16 *tall, const u16 *right);
+void LayoutPrepare(void);              // margin art and number panels only (what the GPU presenter needs; the table itself is drawn by the GPU)
+void LayoutFollowInfo(int *r0x16, int *moving);   // following view: first board row shown, in 1/16 rows, and whether the camera is moving
 void LayoutMenuFrame(const u16 *pic);   // a 240x160 picture (menus, bonus stages), scaled to fill the top screen
 const u16 *LayoutTopR(void);          // right-eye top panel, valid after LayoutFrame with a right image
 void LayoutTableCols(int *topX0, int *topW, int *botX0, int *botW);

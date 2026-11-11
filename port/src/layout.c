@@ -330,9 +330,9 @@ static void SideJob(void *arg)
     if (a->hasR) ZoomPanel(&a->r);
 }
 
-// Draws the table into the panel images and returns nothing; the margins are
-// repainted only when the view or the table changes.
-void LayoutFrame(const u16 *tall, const u16 *right)
+// Margin art and number panels: repainted only when the view or the table changes, or the numbers do.
+// Both presenters need this; only the CPU one then copies the table into the panel images.
+void LayoutPrepare(void)
 {
     if (sMode != 1 || sPaintedView != gPortView || sPaintedField != gPortField) {
         sMode = 1;
@@ -348,6 +348,18 @@ void LayoutFrame(const u16 *tall, const u16 *right)
         LayoutTableCols(&tx, &tw, &bx, &bw);
         DrawStats(tx);
     }
+}
+
+// Where the GPU presenter puts the table in the following view: first board row shown, in 1/16 rows
+// (output row y shows board row (r0x16 + 12 y) / 16), and whether the camera is moving (smooth) or at
+// rest (hard-edged pixels).
+void LayoutFollowInfo(int *r0x16, int *moving) { *r0x16 = sR0; *moving = sMoving; }
+
+// Draws the table into the panel images and returns nothing; the margins are
+// repainted only when the view or the table changes.
+void LayoutFrame(const u16 *tall, const u16 *right)
+{
+    LayoutPrepare();
     if (!gPortView) {
         for (int y = 0; y < PH; y++) {
             memcpy(sTop + y * TW + 80, tall + y * GBA_W, GBA_W * 2);

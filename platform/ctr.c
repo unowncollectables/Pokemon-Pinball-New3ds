@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <sys/stat.h>
 #include "port.h"
+#include "gpu3ds.h"
 
 #define DATA_DIR "sdmc:/3ds/pinball-rs"
 
@@ -63,9 +64,11 @@ static void SetLayout(int layout)
 
 static void BlitCols(u16 *fb, int panelW, const u16 *img, int c0, int c1);
 static int s3d;                                 // stereo output is switched on
+static int sGpuActive;                          // the last frame was drawn by the GPU presenter (gpu3ds.c)
 
 void PlatPresent(const u16 *src)
 {
+    if (sGpuActive) { GpuIdle(); sGpuActive = 0; }   // the GPU's last frame must be on the screens before the CPU writes them
     SetLayout(0);
     u32 t0 = PlatTicksUs();
     if (s3d) { s3d = 0; gfxSet3D(false); }
@@ -118,8 +121,15 @@ int PlatDepth(void)
 void PlatPresentTall(const u16 *src, const u16 *right)
 {
     SetLayout(1);
-    u32 t0 = PlatTicksUs();
     int on3d = right != NULL;
+    if (GpuInit()) {                                // GPU presenter: textures and a few rectangles instead of the CPU zoom and rotate
+        if (on3d != s3d) { s3d = on3d; gfxSet3D(on3d); LayoutRepaint(); }
+        LayoutPrepare();
+        sGpuActive = 1;
+        GpuPresentTall(src, right);
+        return;
+    }
+    u32 t0 = PlatTicksUs();
     if (on3d != s3d) { s3d = on3d; gfxSet3D(on3d); LayoutRepaint(); }
     LayoutFrame(src, right);
     int tx, tw, bx, bw;
@@ -321,6 +331,7 @@ u32 PlatTicksUs(void) { return (u32)(svcGetSystemTick() * 1000000ull / SYSCLOCK_
 void PlatShutdown(void)
 {
     if (sViewSaveAt) { sViewSaveAt = 0; WriteView(); }
+    GpuShutdown();
     if (sLog) fclose(sLog);
     if (sAudioOk) { ndspChnWaveBufClear(0); ndspExit(); linearFree(sAudioMem); }
     gfxExit();
@@ -328,6 +339,7 @@ void PlatShutdown(void)
 
 void PlatFatalScreen(const char *text)
 {
+    GpuShutdown();                                  // the text screen is drawn by the CPU
     gfxSetDoubleBuffering(GFX_BOTTOM, false);
     consoleInit(GFX_BOTTOM, NULL);
     printf("\x1b[2J\x1b[H%s\n\nSaved to %s/crash.txt\nPress START to exit.\n", text, DATA_DIR);
