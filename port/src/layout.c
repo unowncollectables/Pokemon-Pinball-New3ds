@@ -309,7 +309,7 @@ static void PaintMenuPanels(int fill)
     Text(sBot, BW, (BW - 17 * 6) / 2, 42, "RUBY AND SAPPHIRE", 1, soft);
     static const char *const rows[][2] = {
         { "L / R", "FLIPPERS" }, { "A", "LAUNCH AND SELECT" }, { "START", "PAUSE" },
-        { "Y", "SWITCH VIEW AND MENU SIZE" }, { "3D SLIDER", "DEPTH" },
+        { "Y", "WHOLE TABLE OR FOLLOW VIEW" }, { "3D SLIDER", "DEPTH" },
     };
     for (int i = 0; i < 5; i++) {
         int y = 80 + i * 24;
@@ -329,21 +329,14 @@ static void Row3of2(const u16 *s, u16 *d)
     for (int i = 0; i < 120; i++, s += 2, d += 3) { d[0] = s[0]; d[1] = Avg(s[0], s[1]); d[2] = s[1]; }
 }
 
-// A 240x160 picture on the top screen: 1:1 in the middle (view 0), or 1.5x filling the height (view 1).
+// A 240x160 picture on the top screen at 1.5x, filling the height; our own backdrop fills the sides.
 void LayoutMenuFrame(const u16 *src)
 {
-    static int sMenuView = -1;
-    if (sMode != 0 || sMenuView != gPortView) {
+    if (sMode != 0) {
         sMode = 0;
-        sMenuView = gPortView;
         sPaintedView = -1;             // the table panels are painted again when play resumes
-        PaintMenuPanels(gPortView);
+        PaintMenuPanels(1);
         sDirty = 2;
-    }
-    if (!gPortView) {
-        for (int y = 0; y < GBA_H; y++)
-            memcpy(sTop + (MENU_Y + y) * TW + MENU_X, src + y * GBA_W, GBA_W * 2);
-        return;
     }
     u16 r[2][360] __attribute__((aligned(4)));
     u16 *d = sTop + 20;
