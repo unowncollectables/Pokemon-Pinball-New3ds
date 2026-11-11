@@ -5,7 +5,7 @@
 # 2. fetches the decompilation and its compiler at the pinned commits
 # 3. rebuilds the game from it and checks the result is byte for byte your ROM
 # 4. adapts that tree (tools/prepare.py) and compiles it with the port for the 3DS
-# Result: build/pinball-rs.3dsx. Needs devkitARM + libctru (DEVKITPRO, default
+# Result: build/pinball-rs.3dsx. Needs devkitARM + libctru + citro3d + picasso (DEVKITPRO, default
 # /opt/devkitpro), git, make, gcc, g++, python3, jq and libpng-dev. Safe to repeat;
 # finished stages are skipped.
 set -euo pipefail
@@ -19,6 +19,8 @@ export DEVKITARM="$DEVKITPRO/devkitARM"
 export PATH="$DEVKITARM/bin:$DEVKITPRO/tools/bin:$PATH"
 [ -x "$DEVKITARM/bin/arm-none-eabi-gcc" ] || die "devkitARM not found in $DEVKITPRO"
 [ -f "$DEVKITPRO/libctru/lib/libctru.a" ] || die "libctru not found in $DEVKITPRO"
+[ -f "$DEVKITPRO/libctru/lib/libcitro3d.a" ] || die "citro3d not found in $DEVKITPRO (it comes with the 3ds-dev group: sudo dkp-pacman -S 3ds-dev)"
+command -v picasso >/dev/null || die "picasso (the shader assembler) not found in $DEVKITPRO/tools/bin"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
 [ -n "$ROM" ] && [ -f "$ROM" ] || die "give the path to your Pokemon Pinball: Ruby & Sapphire (US) ROM"

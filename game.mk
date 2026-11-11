@@ -20,11 +20,12 @@ PORTCFLAGS := $(ARCH) -O2 -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter -I$(
 
 ifeq ($(PLATFORM),3ds)
 CC := arm-none-eabi-gcc
-PLAT_SRCS := $(PORT)/platform/ctr.c
+PLAT_SRCS := $(PORT)/platform/ctr.c $(PORT)/platform/gpu3ds.c
 PORTCFLAGS += -D__3DS__ -I$(DEVKITPRO)/libctru/include
 LDFLAGS := -specs=3dsx.specs $(ARCH) -L$(DEVKITPRO)/libctru/lib -Wl,--no-enum-size-warning
-LIBS := -lctru -lm
+LIBS := -lcitro3d -lctru -lm
 TARGET := $(PORT)/build/pinball3ds.elf
+SHADER_OBJS := $(OBJ)/platform/blit_shbin.o
 else
 CC := arm-linux-gnueabihf-gcc
 PLAT_SRCS := $(PORT)/platform/headless.c
@@ -42,7 +43,7 @@ PORT_SRCS := $(wildcard $(PORT)/port/src/*.c)
 GAME_OBJS := $(patsubst src/%.c,$(OBJ)/game/%.o,$(GAME_SRCS)) $(OBJ)/game/m4a_1.o
 DATA_OBJS := $(patsubst data/%.s,$(OBJ)/data/%.o,$(DATA_SRCS)) $(OBJ)/data/port_ram.o
 PORT_OBJS := $(patsubst $(PORT)/port/src/%.c,$(OBJ)/port/%.o,$(PORT_SRCS)) \
-             $(patsubst $(PORT)/platform/%.c,$(OBJ)/platform/%.o,$(PLAT_SRCS))
+             $(patsubst $(PORT)/platform/%.c,$(OBJ)/platform/%.o,$(PLAT_SRCS)) $(SHADER_OBJS)
 
 all: $(TARGET)
 
@@ -65,7 +66,17 @@ $(OBJ)/data/port_ram.o: port_ram.s
 $(OBJ)/port/%.o: $(PORT)/port/src/%.c $(PORT)/port/include/port.h
 	$(CC) $(PORTCFLAGS) -c $< -o $@
 
-$(OBJ)/platform/%.o: $(PORT)/platform/%.c $(PORT)/port/include/port.h
+$(OBJ)/platform/%.o: $(PORT)/platform/%.c $(PORT)/port/include/port.h $(wildcard $(PORT)/platform/*.h)
+	$(CC) $(PORTCFLAGS) -c $< -o $@
+
+# 3DS only: the vertex shader for the GPU presenter, assembled with picasso and embedded as a C array.
+$(OBJ)/platform/blit.shbin: $(PORT)/platform/shaders/blit.v.pica
+	picasso -o $@ $<
+
+$(OBJ)/platform/blit_shbin.c: $(OBJ)/platform/blit.shbin $(PORT)/tools/shbin2c.py
+	python3 $(PORT)/tools/shbin2c.py $< blit_shbin > $@
+
+$(OBJ)/platform/blit_shbin.o: $(OBJ)/platform/blit_shbin.c
 	$(CC) $(PORTCFLAGS) -c $< -o $@
 
 $(TARGET): $(GAME_OBJS) $(DATA_OBJS) $(PORT_OBJS)

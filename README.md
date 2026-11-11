@@ -61,6 +61,17 @@ headless build: `PORT_NOTALL=1` draws the original 240x160 picture,
 Files live in `sdmc:/3ds/pinball-rs/`: `pinball.sav`, `log.txt`, and
 `crash.txt` if something goes wrong.
 
+The table screens (both views, with or without 3D) are put on the screens by the GPU:
+the CPU still composes the 240x480 table picture, the right-eye picture and our margin art,
+and `platform/gpu3ds.c` uploads them as textures and draws a few textured rectangles with citro3d
+(vertex shader `platform/shaders/blit.v.pica`, assembled by `picasso` at build time and embedded).
+The zoom, the camera and the margin art stay in `layout.c`. If citro3d cannot start the port falls
+back to the CPU presenter in `platform/ctr.c`; to force that, put a `0` in `sdmc:/3ds/pinball-rs/gpu.cfg`.
+A boot guard (`gpu.pending`, removed after 600 good GPU frames or on a clean exit) means a GPU path that hangs or
+crashes on a console cannot lock the game out: the next boot logs `gpu: SAFE BOOT` and uses the CPU presenter once.
+`log.txt` shows `gpu: citro3d presenter ready` (or why not) and a `gpu` column in the perf lines.
+Menus and bonus stages still use the CPU presenter, and the headless build always does.
+
 ## What comes from where
 
 Everything game-derived is produced on your machine at build time from the
