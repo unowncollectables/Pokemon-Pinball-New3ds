@@ -41,6 +41,12 @@ AccessControlInfo:
   CanShareDeviceMemory          : true
   RunnableOnSleep               : false
   SpecialMemoryArrange          : true
+  # Without these two the HOME Menu version cannot touch sound or video memory:
+  # the first write to the sound processor's shared memory is a data abort.
+  IORegisterMapping:
+    - 1ff00000-1ff7ffff   # DSP memory
+  MemoryMapping:
+    - 1f000000-1f5fffff:r # VRAM
   SystemCallAccess:
     ControlMemory: 1
     QueryMemory: 2
