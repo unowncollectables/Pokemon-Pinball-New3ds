@@ -29,7 +29,7 @@ else
 CC := arm-linux-gnueabihf-gcc
 PLAT_SRCS := $(PORT)/platform/headless.c
 LDFLAGS := -static $(ARCH) -Wl,-z,noexecstack
-LIBS := -lm
+LIBS := -lm -lpthread
 TARGET := $(PORT)/build/pinball_headless
 ARCH := $(filter-out -mtp=soft,$(ARCH))
 endif

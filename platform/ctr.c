@@ -110,23 +110,38 @@ static void BlitCols(u16 *fb, int panelW, const u16 *img, int c0, int c1)
 }
 
 // The tall table, arranged by layout.c: the upper half on the top screen, the lower half on the bottom one.
-void PlatPresentTall(const u16 *src)
+int PlatDepth(void)
+{
+    float v = osGet3DSliderState();
+    return v < 0.03f ? 0 : (int)(v * 256.0f);
+}
+
+void PlatPresentTall(const u16 *src, const u16 *right)
 {
     SetLayout(1);
     u32 t0 = PlatTicksUs();
-    LayoutFrame(src);
+    static int was3d;
+    int on3d = right != NULL;
+    if (on3d != was3d) { was3d = on3d; gfxSet3D(on3d); LayoutRepaint(); }
+    LayoutFrame(src, right);
     int tx, tw, bx, bw;
     LayoutTableCols(&tx, &tw, &bx, &bw);
     u16 w, h;
     u16 *top = (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+    u16 *topR = on3d ? (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_RIGHT, &w, &h) : NULL;
     u16 *bot = (u16 *)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
     if (LayoutMarginsDirty()) {
         BlitCols(top, TOP_W, LayoutTop(), 0, tx);
         BlitCols(top, TOP_W, LayoutTop(), tx + tw, TOP_W);
+        if (topR) {
+            BlitCols(topR, TOP_W, LayoutTopR(), 0, tx);
+            BlitCols(topR, TOP_W, LayoutTopR(), tx + tw, TOP_W);
+        }
         BlitCols(bot, BOT_W, LayoutBot(), 0, BOT_W);
         LayoutMarginsDone();
     }
     BlitCols(top, TOP_W, LayoutTop(), tx, tx + tw);
+    if (topR) BlitCols(topR, TOP_W, LayoutTopR(), tx, tx + tw);
     BlitCols(bot, BOT_W, LayoutBot(), bx, bx + bw);
     gfxFlushBuffers();
     gfxSwapBuffers();
@@ -137,6 +152,44 @@ void PlatPresentTall(const u16 *src)
 }
 
 static void SaveView(void);
+
+// ---- second thread -----------------------------------------------------
+static Thread sWorker;
+static LightEvent sGo, sDone;
+static void (*sJobFn)(void *);
+static void *sJobArg;
+static volatile int sWorkerState;                 // 0 untried, 1 running, -1 unavailable
+static volatile int sQuit;
+
+static void WorkerMain(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        LightEvent_Wait(&sGo);
+        if (sQuit) return;
+        sJobFn(sJobArg);
+        LightEvent_Signal(&sDone);
+    }
+}
+
+int PlatJobStart(void (*fn)(void *), void *arg)
+{
+    if (sWorkerState == 0) {
+        LightEvent_Init(&sGo, RESET_ONESHOT);
+        LightEvent_Init(&sDone, RESET_ONESHOT);
+        s32 prio = 0x30;
+        svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+        sWorker = threadCreate(WorkerMain, NULL, 64 * 1024, prio, 2, false);   // core 2: free on the New 3DS
+        sWorkerState = sWorker ? 1 : -1;
+        PlatLog("worker thread: %s", sWorker ? "running on core 2" : "unavailable, drawing on one core");
+    }
+    if (sWorkerState < 0) return 0;
+    sJobFn = fn; sJobArg = arg;
+    LightEvent_Signal(&sGo);
+    return 1;
+}
+
+void PlatJobWait(void) { LightEvent_Wait(&sDone); }
 
 // ---- input -------------------------------------------------------------
 static u16 sKeys;

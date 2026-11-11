@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include "port.h"
 
-static const u8 *sIo = gGbaIo;     // register file being read: live, or one latched scanline (tall mode)
+static __thread const u8 *sIo = gGbaIo;     // register file being read: live, or one latched scanline (tall mode)
 #define R16(off) (*(const u16 *)(sIo + (off)))
 
 enum { L_BG0, L_BG1, L_BG2, L_BG3, L_OBJ, L_BD };
@@ -396,6 +396,9 @@ INL void FastBg(Ctx *c, int n, int y, int track)
     }
 }
 
+static __thread int sEyeDX[4];                  // pixels to move BG1, BG2, BG3 and the world sprites in the eye being drawn
+static __thread int sObjDX;
+
 INL void FastObj(Ctx *c, const Spr *sp, int y, int track)
 {
     const u8 *chr = gGbaVram + 0x10000;
@@ -403,7 +406,7 @@ INL void FastObj(Ctx *c, const Spr *sp, int y, int track)
     int w = sp->w, h = sp->h, bw = w, bh = h;
     if (sp->flags & SF_DOUBLE) { bw *= 2; bh *= 2; }
     int oy = sp->y;
-    int ly = y - oy, ox = sp->x;
+    int ly = y - oy, ox = sp->x + sObjDX;
     int bpp8 = sp->flags & SF_8BPP;
     int tstep = bpp8 ? 2 : 1;
     int rowTiles = map1d ? (w >> 3) : 32;
@@ -478,7 +481,7 @@ INL void PaintLine(Ctx *c, int y, int dispcnt, int track)
 static inline void Split(u16 c, int *r, int *g, int *b) { *r = c >> 11; *g = (c >> 6) & 31; *b = c & 31; }
 static inline u16 Join(int r, int g, int b) { return (u16)((r << 11) | (((g << 1) | (g >> 4)) << 5) | b); }
 
-static Ctx sCtx;
+static __thread Ctx sCtx;
 
 void PpuRenderLine(int y, u16 *dst)
 {
@@ -819,16 +822,19 @@ static void RefreshLayers(void)
     sIo = gGbaIo;
 }
 
+// Stereo 3D: each layer is moved sideways per eye by its own amount (positive = toward the viewer).
+
 INL void OverlayLayer(Ctx *c, int n, int R, int track)
 {
     const Layer *L = &sLayer[n - 1];
     int a = L->xmin[R], b = L->xmax[R];
     const u8 *idx = sLayerIdx[n - 1] + R * GBA_W;
+    int dx = sEyeDX[n - 1];
     if (!track) {
-        u16 *lb = c->lb + 8;
+        u16 *lb = c->lb + 8 + dx;
         for (int x = a; x < b; x++) { u32 v = idx[x]; if (v) lb[x] = sPal565[v]; }
     } else {
-        for (int x = a; x < b; x++) { u32 v = idx[x]; if (v) Px(c, 8 + x, sPal565[v], n, 1); }
+        for (int x = a; x < b; x++) { u32 v = idx[x]; if (v) Px(c, 8 + dx + x, sPal565[v], n, 1); }
     }
 }
 
@@ -856,7 +862,7 @@ INL void PaintRowT(Ctx *c, int R, int dispcnt, int track)
                 int b = 31 - __builtin_clz(m);
                 m &= ~(1u << b);
                 const Spr *sp = &sTSpr[sTSprLive[w * 32 + b]];
-                if (sp->prio == p) FastObj(c, sp, sp->ui ? R - TALL_BAND : R, track);
+                if (sp->prio == p) { sObjDX = sp->ui ? 0 : sEyeDX[3]; FastObj(c, sp, sp->ui ? R - TALL_BAND : R, track); sObjDX = 0; }
             }
         }
     }
@@ -945,7 +951,26 @@ static void ComposeRowT(int R, u16 *dst)
     }
 }
 
-void PpuRenderTall(u16 *dst)
+typedef struct { u16 *out; int r0, r1, eye; } Task;     // eye: 0 flat, 1 left, 2 right
+typedef struct { Task t[2]; int n, depth; } Job;
+static const int sLayerZ[4] = { 1, 0, -2, 3 };    // BG1, BG2, BG3, world sprites (pixels per eye at full slider, times 1.5)
+
+static void RunJob(void *arg)
+{
+    const Job *j = arg;
+    for (int k = 0; k < j->n; k++) {
+        const Task *t = &j->t[k];
+        for (int i = 0; i < 4; i++) {
+            int d = t->eye ? (sLayerZ[i] * 3 * j->depth + 256) >> 9 : 0;   // 1.5 * z pixels per eye at full slider
+            sEyeDX[i] = t->eye == 2 ? -d : d;
+        }
+        for (int R = t->r0; R < t->r1; R++) ComposeRowT(R, t->out + R * GBA_W);
+    }
+    memset(sEyeDX, 0, sizeof sEyeDX);
+}
+
+// depth 0..256 is the 3D slider; with depth > 0 the upper 240 rows are also drawn for the right eye.
+void PpuRenderTall(u16 *dst, u16 *right, int depth)
 {
     sIo = gGbaIo;
     static int palOk;
@@ -957,6 +982,21 @@ void PpuRenderTall(u16 *dst)
     }
     RebuildSpritesTall();
     RefreshLayers();
-    for (int R = 0; R < TALL_H; R++) ComposeRowT(R, dst + R * GBA_W);
+    // The rows are drawn by two threads: the lower half on the New 3DS's spare core,
+    // or, with 3D on, one eye each. Each task is a run of rows for one eye.
+    Job a, w;
+    memset(&a, 0, sizeof a); memset(&w, 0, sizeof w);
+    if (depth > 0 && right) {
+        a.n = 2; a.depth = w.depth = depth;
+        a.t[0] = (Task){ dst, 0, 240, 1 };      a.t[1] = (Task){ dst, 240, 360, 0 };
+        w.n = 2;
+        w.t[0] = (Task){ right, 0, 240, 2 };    w.t[1] = (Task){ dst, 360, TALL_H, 0 };
+    } else {
+        a.n = 1; a.t[0] = (Task){ dst, 0, 240, 0 };
+        w.n = 1; w.t[0] = (Task){ dst, 240, TALL_H, 0 };
+    }
+    int async = PlatJobStart(RunJob, &w);
+    RunJob(&a);
+    if (async) PlatJobWait(); else RunJob(&w);
     sIo = gGbaIo;
 }

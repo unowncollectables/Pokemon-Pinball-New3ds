@@ -74,21 +74,68 @@ u16 PlatKeys(void)
 
 static void DumpPpm(const u16 *fb, int h);
 void PlatPresent(const u16 *fb) { DumpPpm(fb, GBA_H); }
-void PlatPresentTall(const u16 *fb)
+#include <pthread.h>
+static pthread_t sWorker;
+static pthread_mutex_t sMu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sCv = PTHREAD_COND_INITIALIZER;
+static void (*sJobFn)(void *);
+static void *sJobArg;
+static int sJobPending, sJobBusy, sWorkerState;
+
+static void *WorkerMain(void *a)
+{
+    (void)a;
+    pthread_mutex_lock(&sMu);
+    for (;;) {
+        while (!sJobPending) pthread_cond_wait(&sCv, &sMu);
+        void (*fn)(void *) = sJobFn; void *arg = sJobArg;
+        sJobPending = 0; sJobBusy = 1;
+        pthread_mutex_unlock(&sMu);
+        fn(arg);
+        pthread_mutex_lock(&sMu);
+        sJobBusy = 0;
+        pthread_cond_broadcast(&sCv);
+    }
+    return NULL;
+}
+
+int PlatJobStart(void (*fn)(void *), void *arg)
+{
+    if (sWorkerState == 0) {
+        sWorkerState = getenv("PORT_NOTHREAD") || pthread_create(&sWorker, NULL, WorkerMain, NULL) ? -1 : 1;
+    }
+    if (sWorkerState < 0) return 0;
+    pthread_mutex_lock(&sMu);
+    sJobFn = fn; sJobArg = arg; sJobPending = 1;
+    pthread_cond_broadcast(&sCv);
+    pthread_mutex_unlock(&sMu);
+    return 1;
+}
+
+void PlatJobWait(void)
+{
+    pthread_mutex_lock(&sMu);
+    while (sJobPending || sJobBusy) pthread_cond_wait(&sCv, &sMu);
+    pthread_mutex_unlock(&sMu);
+}
+
+int PlatDepth(void) { const char *e = getenv("PORT_DEPTH"); return e ? atoi(e) : 0; }
+
+void PlatPresentTall(const u16 *fb, const u16 *right)
 {
     DumpPpm(fb, TALL_H);
     if (getenv("PORT_VIEW")) gPortView = atoi(getenv("PORT_VIEW"));
-    LayoutFrame(fb);
+    LayoutFrame(fb, right);
     int want = sDumpEvery && gPortFrame % sDumpEvery == 0;
     for (int i = 0; i < sNumDump; i++) if (sDump[i] == gPortFrame) want = 1;
     if (!want || !getenv("PORT_LAYOUTDUMP")) return;
-    static const int W[2] = { 400, 320 };
-    for (int p = 0; p < 2; p++) {
+    static const int W[3] = { 400, 320, 400 };
+    for (int p = 0; p < (right ? 3 : 2); p++) {
         char path[320];
-        snprintf(path, sizeof path, "%s/f%05u_%s.ppm", sOut, (unsigned)gPortFrame, p ? "bot" : "top");
+        snprintf(path, sizeof path, "%s/f%05u_%s.ppm", sOut, (unsigned)gPortFrame, p == 2 ? "topR" : p ? "bot" : "top");
         FILE *f = fopen(path, "wb");
         if (!f) continue;
-        const u16 *img = p ? LayoutBot() : LayoutTop();
+        const u16 *img = p == 2 ? LayoutTopR() : p ? LayoutBot() : LayoutTop();
         fprintf(f, "P6\n%d 240\n255\n", W[p]);
         for (int i = 0; i < W[p] * 240; i++) {
             u16 c = img[i];
