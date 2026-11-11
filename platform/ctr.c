@@ -14,6 +14,8 @@ u32 __stacksize__ = 0x40000;
 // ---- video -------------------------------------------------------------
 #define TOP_W 400
 #define TOP_H 240
+#define BOT_W 320
+#define BOT_H 240
 
 static void ClearTop(void)
 {
@@ -26,18 +28,74 @@ static void ClearTop(void)
     }
 }
 
+// Which picture layout is on the panels: 0 = the plain 240x160 centred on the top screen, 1 = the tall table over both.
+static int sLayout;
+
+static void ClearBottom(void)
+{
+    u16 w, h;
+    u8 *fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+    memset(fb, 0, (size_t)w * h * 2);
+}
+
+static void SetLayout(int layout)
+{
+    if (layout == sLayout) return;
+    sLayout = layout;
+    ClearTop();                                     // both buffers: nothing of the old picture may linger
+    ClearBottom();
+    gfxFlushBuffers();
+}
+
+// Copies rows [row0, row0+rows) of a GBA_W-wide picture to a panel of the given size, centred.
+// The panels are stored rotated: column x, bottom-up.
+static void Blit(u16 *fb, int panelW, int panelH, const u16 *src, int rows)
+{
+    const int ox = (panelW - GBA_W) / 2, oy = (panelH - rows) / 2;
+    // Eight columns at a time: the source is read along its rows and the eight
+    // destination columns each fill one cache line, instead of one miss per pixel.
+    for (int x0 = 0; x0 < GBA_W; x0 += 8) {
+        u16 *c0 = fb + (x0 + ox) * panelH + (panelH - 1 - oy);
+        const u16 *s = src + x0;
+        for (int y = 0; y < rows; y++, s += GBA_W) {
+            u16 *d = c0 - y;
+            d[0] = s[0];
+            d[panelH] = s[1];
+            d[2 * panelH] = s[2];
+            d[3 * panelH] = s[3];
+            d[4 * panelH] = s[4];
+            d[5 * panelH] = s[5];
+            d[6 * panelH] = s[6];
+            d[7 * panelH] = s[7];
+        }
+    }
+}
+
 void PlatPresent(const u16 *src)
 {
+    SetLayout(0);
     u32 t0 = PlatTicksUs();
     u16 w, h;
     u16 *fb = (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
-    const int ox = (TOP_W - GBA_W) / 2, oy = (TOP_H - GBA_H) / 2;
-    // The panel is stored rotated: column x, bottom-up.
-    for (int x = 0; x < GBA_W; x++) {
-        u16 *col = fb + (x + ox) * TOP_H + (TOP_H - 1 - oy);
-        const u16 *s = src + x;
-        for (int y = 0; y < GBA_H; y++, s += GBA_W) *col-- = *s;
-    }
+    Blit(fb, TOP_W, TOP_H, src, GBA_H);
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    u32 t1 = PlatTicksUs();
+    gspWaitForVBlank();
+    PerfAdd(PERF_BLIT, t1 - t0);
+    PerfAdd(PERF_VSYNC, PlatTicksUs() - t1);
+}
+
+// The tall table: the upper 240 rows on the top screen, the lower 240 (flippers) on the bottom one.
+void PlatPresentTall(const u16 *src)
+{
+    SetLayout(1);
+    u32 t0 = PlatTicksUs();
+    u16 w, h;
+    u16 *top = (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+    Blit(top, TOP_W, TOP_H, src, TOP_H);
+    u16 *bot = (u16 *)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+    Blit(bot, BOT_W, BOT_H, src + (size_t)GBA_W * TOP_H, TALL_H - TOP_H);
     gfxFlushBuffers();
     gfxSwapBuffers();
     u32 t1 = PlatTicksUs();
@@ -216,6 +274,7 @@ void PlatInit(int argc, char **argv)
     osSetSpeedupEnable(true);                       // New 3DS: full clock speed
     gfxInitDefault();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
+    gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
     gfxSetDoubleBuffering(GFX_TOP, true);
     gfxSetDoubleBuffering(GFX_BOTTOM, false);
     consoleInit(GFX_BOTTOM, NULL);

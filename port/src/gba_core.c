@@ -257,6 +257,7 @@ void GbaRaiseIrq(u16 flag)
 
 // ---- Frame -----------------------------------------------------------
 static u16 sFrame[GBA_W * GBA_H];
+static u16 sTallFrame[GBA_W * TALL_H];
 static int sWaited;
 static u32 sLastPresentMs;
 
@@ -272,11 +273,18 @@ static void SetLine(int line)
 
 void GbaRunFrame(void)
 {
+    int tall = gSnapTall;                  // a main board: drawn whole, after the frame, from latched registers
     for (int line = 0; line < 228; line++) {
         SetLine(line);
         if (line < GBA_H) {
             u32 t = PlatTicksUs();
-            PpuRenderLine(line, sFrame + line * GBA_W);
+            if (tall) PpuLatchLine(line);
+            else PpuRenderLine(line, sFrame + line * GBA_W);
+            PerfAdd(PERF_PPU, PlatTicksUs() - t);
+        }
+        if (line == 160 && tall) {
+            u32 t = PlatTicksUs();
+            PpuRenderTall(sTallFrame);
             PerfAdd(PERF_PPU, PlatTicksUs() - t);
         }
         u16 st = IO16(REG_DISPSTAT);
@@ -285,7 +293,8 @@ void GbaRunFrame(void)
         // line's HBlank, so their writes land from the next line on.
         if ((st & DISPSTAT_VCOUNT_INTR) && (st & DISPSTAT_VCOUNT)) GbaRaiseIrq(INTR_VCOUNT);
         if (line == 160) {
-            PlatPresent(sFrame);
+            if (tall) PlatPresentTall(sTallFrame);
+            else PlatPresent(sFrame);
             PerfFrameEnd();
             PortAudioFrame();
             PortSaveTick();

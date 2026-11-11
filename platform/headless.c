@@ -10,8 +10,8 @@
 
 static u32 sMaxFrames = 600;
 static char sOut[256] = ".";
-static u32 sDump[256]; static int sNumDump; static u32 sDumpEvery;
-static struct { u32 frame, len; u16 keys; } sKeys[256]; static int sNumKeys;
+static u32 sDump[4096]; static int sNumDump; static u32 sDumpEvery;
+static struct { u32 frame, len; u16 keys; } sKeys[4096]; static int sNumKeys;
 static FILE *sWav; static u32 sWavFrames; static int sWavRate;
 
 static u16 KeyBit(const char *n)
@@ -72,7 +72,11 @@ u16 PlatKeys(void)
     return k;
 }
 
-void PlatPresent(const u16 *fb)
+static void DumpPpm(const u16 *fb, int h);
+void PlatPresent(const u16 *fb) { DumpPpm(fb, GBA_H); }
+void PlatPresentTall(const u16 *fb) { DumpPpm(fb, TALL_H); }
+
+static void DumpPpm(const u16 *fb, int h)
 {
     int want = sDumpEvery && gPortFrame % sDumpEvery == 0;
     for (int i = 0; i < sNumDump; i++) if (sDump[i] == gPortFrame) want = 1;
@@ -81,13 +85,29 @@ void PlatPresent(const u16 *fb)
     snprintf(path, sizeof path, "%s/f%05u.ppm", sOut, (unsigned)gPortFrame);
     FILE *f = fopen(path, "wb");
     if (!f) return;
-    fprintf(f, "P6\n%d %d\n255\n", GBA_W, GBA_H);
-    for (int i = 0; i < GBA_W * GBA_H; i++) {
+    fprintf(f, "P6\n%d %d\n255\n", GBA_W, h);
+    for (int i = 0; i < GBA_W * h; i++) {
         u16 c = fb[i];
         u8 rgb[3] = { (c >> 11) << 3 | (c >> 11) >> 2, ((c >> 5) & 63) << 2 | ((c >> 5) & 63) >> 4, (c & 31) << 3 | (c & 31) >> 2 };
         fwrite(rgb, 1, 3, f);
     }
     fclose(f);
+    if (getenv("PORT_DUMPMEM")) {              // raw hardware state, for analysis scripts
+        static const struct { const char *n; const u8 *p; size_t len; } m[] = {
+            { "io", gGbaIo, 0x400 }, { "vram", gGbaVram, 0x18000 }, { "pltt", gGbaPltt, 0x400 }, { "oam", gGbaOam, 0x400 },
+            { "ewram", gGbaEwram, 0 }, };
+        {
+            extern u8 gBoardBGTileBuffer[], gBoardBGTileBufferAlt[];
+            snprintf(path, sizeof path, "%s/f%05u.buf", sOut, (unsigned)gPortFrame);
+            FILE *g = fopen(path, "wb");
+            if (g) { fwrite(gBoardBGTileBuffer, 1, 32 * 0x400, g); fwrite(gBoardBGTileBufferAlt, 1, 32 * 0x400, g); fclose(g); }
+        }
+        for (int i = 0; i < 4; i++) {
+            snprintf(path, sizeof path, "%s/f%05u.%s", sOut, (unsigned)gPortFrame, m[i].n);
+            FILE *g = fopen(path, "wb");
+            if (g) { fwrite(m[i].p, 1, m[i].len, g); fclose(g); }
+        }
+    }
 }
 
 void PlatAudioQueue(const s16 *stereo, int frames, int rate)
