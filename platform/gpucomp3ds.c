@@ -48,7 +48,7 @@ typedef struct { C3D_Tex *tex; int first, count; int mode; } Op;
 static float sZ = 0.5f;
 
 static int sReady, sUProj;
-static C3D_Tex sLayerTex[3], sBandTex, sAtlas, sRtTexL, sRtTexR, sBackTex, sSprTex, sFadeTex;
+static C3D_Tex sLayerTex[3], sBandTex, sAtlas, sRtTexL, sRtTexR, sBackTex, sSprTex, sFadeTex, sSheetTex;
 static int sFadeKind;                    // what sFadeTex holds: 0 nothing yet, 1 white, 2 black
 static C3D_RenderTarget *sRtS;           // the sprite buffer: one priority level of sprites, RGBA, for levels that hold semi sprites
 static int sBackKnown; static u16 sBackCol;
@@ -93,6 +93,9 @@ int GpucInit(int uProj)
     }
     if (!C3D_TexInit(&sBandTex, 256, 256, GPU_RGBA5551) || !C3D_TexInit(&sAtlas, AW, AH, GPU_RGBA5551)) { PlatLog("gpuc: band/atlas texture failed"); return 0; }
     if (!C3D_TexInit(&sBackTex, 8, 8, GPU_RGBA5551)) { PlatLog("gpuc: backdrop texture failed"); return 0; }
+    if (!C3D_TexInit(&sSheetTex, GPU_SHEET, GPU_SHEET, GPU_RGBA5551)) { PlatLog("gpuc: sheet texture failed"); return 0; }
+    C3D_TexSetFilter(&sSheetTex, GPU_NEAREST, GPU_NEAREST); C3D_TexSetWrap(&sSheetTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    memset(sSheetTex.data, 0, GPU_SHEET * GPU_SHEET * 2); GSPGPU_FlushDataCache(sSheetTex.data, GPU_SHEET * GPU_SHEET * 2);
     if (!C3D_TexInit(&sFadeTex, 8, 8, GPU_RGBA5551)) { PlatLog("gpuc: fade texture failed"); return 0; }
     C3D_TexSetFilter(&sFadeTex, GPU_NEAREST, GPU_NEAREST); C3D_TexSetWrap(&sFadeTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     C3D_TexSetFilter(&sBackTex, GPU_NEAREST, GPU_NEAREST); C3D_TexSetWrap(&sBackTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
@@ -164,6 +167,34 @@ static int AtlasSlot(unsigned tile, unsigned bank)
     return e->slot;
 }
 
+// The picture of an affine sprite, decoded whole into the sheet texture (with a transparent margin: out-of-picture samples clamp onto it).
+static int sSheetDirty;
+static void SheetPut(unsigned x, unsigned y, u16 col)
+{
+    unsigned block = (GPU_SHEET / 8 - 1 - (y >> 3)) * (GPU_SHEET / 8) + (x >> 3);
+    ((u16 *)sSheetTex.data)[block * 64 + sMort[(7 - (y & 7)) * 8 + (x & 7)]] = col;
+}
+static void DrawSheet(const PpuGpuFrame *f, int i)
+{
+    const Spr *sp = &f->spr[i];
+    unsigned rx = f->sheetX[i], ry = f->sheetY[i];
+    unsigned cw = (sp->w + 16 + 7) & ~7u, ch = (sp->h + 16 + 7) & ~7u;
+    for (unsigned y = 0; y < ch; y++) for (unsigned x = 0; x < cw; x++) SheetPut(rx + x, ry + y, 0);
+    const u16 *pal = PpuPal565() + sp->palbase;
+    int cols = sp->w >> 3, rows = sp->h >> 3, rowTiles = f->map1d ? cols : 32;
+    for (int tr = 0; tr < rows; tr++)
+        for (int tc = 0; tc < cols; tc++) {
+            const u8 *src = sObjChr + (((unsigned)(sp->tile + tr * rowTiles + tc)) & 0x3FF) * 32;
+            for (int py = 0; py < 8; py++)
+                for (int px = 0; px < 8; px++) {
+                    u8 b = src[py * 4 + (px >> 1)];
+                    unsigned v = (px & 1) ? b >> 4 : b & 15;
+                    if (v) SheetPut(rx + 8 + tc * 8 + px, ry + 8 + tr * 8 + py, To5551(pal[v]));
+                }
+        }
+    sSheetDirty = 1;
+}
+
 // Every visible sprite tile of the frame, resolved to its atlas slot (so the atlas is complete before anything is drawn).
 static void BuildTiles(const PpuGpuFrame *f)
 {
@@ -174,6 +205,7 @@ static void BuildTiles(const PpuGpuFrame *f)
     sNq = 0;
     for (int i = 0; i < f->nSpr; i++) {
         const Spr *sp = &f->spr[i];
+        if (sp->flags & SF_AFFINE) { sSprFirst[i] = sNq; sSprCount[i] = 0; DrawSheet(f, i); continue; }
         int cols = sp->w >> 3, rows = sp->h >> 3;
         int hf = (sp->flags & SF_H) != 0, vf = (sp->flags & SF_V) != 0;
         int rowTiles = f->map1d ? cols : 32;
@@ -191,6 +223,7 @@ static void BuildTiles(const PpuGpuFrame *f)
             }
         sSprCount[i] = sNq - sSprFirst[i];
     }
+    if (sSheetDirty) { GSPGPU_FlushDataCache(sSheetTex.data, GPU_SHEET * GPU_SHEET * 2); sSheetDirty = 0; }
     if (sDirtyHi > sDirtyLo) {
         GSPGPU_FlushDataCache((u8 *)sAtlas.data + sDirtyLo, sDirtyHi - sDirtyLo);
         sDirtyLo = 0xFFFFFFFFu; sDirtyHi = 0;
@@ -261,6 +294,32 @@ static void Pass(const PpuGpuFrame *f, const int *dx, int rlo, int rhi, Op *ops,
         for (int i = f->nSpr - 1; i >= 0; i--) {
             const Spr *sp = &f->spr[i];
             if (sp->prio != p) continue;
+            if (sp->flags & SF_AFFINE) {                     // one quad whose texture coordinates follow the affine matrix
+                if (sNv > first && *nops < MAXOPS) { ops[*nops] = (Op){ &sAtlas, first, sNv - first, cur }; (*nops)++; }
+                first = sNv;
+                const s16 *m = f->affPar[sp->aff];
+                int bw = sp->w, bh = sp->h; if (sp->flags & SF_DOUBLE) { bw *= 2; bh *= 2; }
+                float ox = (float)(sp->x + (sp->ui ? 0 : dx[3])), oy = (float)(sp->y + (sp->ui ? f->ui0 : 0));
+                float lo = (float)rlo, hi = (float)rhi;
+                if (sp->ui) { if (lo < f->ui0) lo = (float)f->ui0; if (hi > f->ui0 + 160) hi = (float)(f->ui0 + 160); }
+                float x0 = ox < 0 ? 0 : ox, x1 = ox + bw > 240 ? 240 : ox + bw, y0 = oy < lo ? lo : oy, y1 = oy + bh > hi ? hi : oy + bh;
+                if (x0 < x1 && y0 < y1 && sNv + 6 <= MAXV) {
+                    float px[4] = { x0, x1, x1, x0 }, py[4] = { y0, y0, y1, y1 }, U[4], V[4];
+                    for (int k = 0; k < 4; k++) {
+                        // the GBA samples at pixel (px, py) with integer arithmetic; the GPU at its centre: shift by half a pixel
+                        float dxp = px[k] - 0.5f - ox - bw / 2.0f, dyp = py[k] - 0.5f - oy - bh / 2.0f;
+                        float u = (m[0] * dxp + m[1] * dyp) / 256.0f + sp->w / 2.0f + 0.001f, v = (m[2] * dxp + m[3] * dyp) / 256.0f + sp->h / 2.0f + 0.001f;
+                        U[k] = (f->sheetX[i] + 8 + u) / GPU_SHEET; V[k] = (f->sheetY[i] + 8 + v) / GPU_SHEET;
+                    }
+                    Vtx *vt = &sVb[sNv];
+                    const int ord[6] = { 0, 1, 2, 0, 2, 3 };
+                    for (int k = 0; k < 6; k++) vt[k] = (Vtx){ px[ord[k]], py[ord[k]], sZ, U[ord[k]], V[ord[k]] };
+                    sNv += 6;
+                    if (*nops < MAXOPS) { ops[*nops] = (Op){ &sSheetTex, first, 6, 0 }; (*nops)++; }
+                }
+                first = sNv;
+                continue;
+            }
             int mode = (sp->flags & SF_SEMI) ? 2 : 0;
             if (mode != cur) {
                 if (sNv > first && *nops < MAXOPS) { ops[*nops] = (Op){ &sAtlas, first, sNv - first, cur }; (*nops)++; }
@@ -424,6 +483,7 @@ void GpucCompare(const u16 *cpuTall, const u16 *cpuRight, int stereo, const u16 
     { const u16 *al[3] = { a1, a2, a3 }; for (int i = 0; i < 3; i++) { unsigned d3 = 0; int l3 = 9999, h3 = -1; Count(sRb, 256, al[i], TALL_H, &d3, &l3, &h3); sCmpAl[i] += d3; } }
     if (cpuAlt) { unsigned d2 = 0; int l2 = 9999, h2 = -1; Count(sRb, 256, cpuAlt, TALL_H, &d2, &l2, &h2); sCmpAltSum += d2; }
     unsigned dumpDiff = diff;
+    { static int fa, nf; nf++; if (nf > 600 && diff > 100 && diff < 5000 && fa < 1) { fa++; Dump("cmpA_cpu.bin", cpuTall, GBA_W, TALL_H); Dump("cmpA_gpu.bin", sRb, 256, TALL_H); PlatLog("gpuc: dumped cmpA (%u px, rows %d-%d)", diff, lo, hi); } }
     { static int fd; if (diff > 20000 && diff < 115000 && fd < 1) { fd++; Dump("cmpF_cpu.bin", cpuTall, GBA_W, TALL_H); Dump("cmpF_gpu.bin", sRb, 256, TALL_H); PlatLog("gpuc: dumped a large-difference frame cmpF (%u px)", diff); } }
     if (diff && diff > sCmpMax && sCmpDumps < 6) {
         char n1[24], n2[24];

@@ -1167,7 +1167,7 @@ const u16 *PpuGpuLayerStage(int n, int *rowLo, int *rowHi)
 
 // A semi-transparent sprite takes the place of every sprite pixel under it (the sprite pixels are resolved first, then
 // the winner is blended with what is beneath), so it hides the sprites it overlaps that it beats. Within one priority
-// level the GPU compositor reproduces that with the depth buffer (the semi sprite writes depth only); across levels it
+// level the GPU compositor reproduces that with a sprite buffer (the semi sprite clears it); across levels it
 // does not: those frames are left to the CPU path.
 static int SemiOverlaps(int g)
 {
@@ -1181,10 +1181,24 @@ static int SemiOverlaps(int g)
     return 0;
 }
 
+static u16 sSheetX[PORT_OAM_N], sSheetY[PORT_OAM_N];
+static int sShelfX, sShelfY, sShelfH;
+// Gives the picture of affine sprite i (plus a transparent margin of 8 on every side) a place in the sheet: shelf packing.
+static int SheetFit(int i)
+{
+    int cw = (sTSpr[i].w + 16 + 7) & ~7, ch = (sTSpr[i].h + 16 + 7) & ~7;
+    if (sShelfX + cw > GPU_SHEET) { sShelfX = 0; sShelfY += sShelfH; sShelfH = 0; }
+    if (sShelfY + ch > GPU_SHEET) return 0;
+    sSheetX[i] = (u16)sShelfX; sSheetY[i] = (u16)sShelfY;
+    sShelfX += cw; if (ch > sShelfH) sShelfH = ch;
+    return 1;
+}
+
 static unsigned sWhy[12];
 static int GpuEligible(void)
 {
     sIo = sLineRegs[0];
+    sShelfX = sShelfY = sShelfH = 0;
     u16 dispcnt = R16(0);
     if (dispcnt & 0xE080) { sWhy[1]++; return 0; }                              // forced blank, windows
     {   // alpha blending is not drawn by the GPU; a brightness fade of everything (all six targets) is, as one blended quad
@@ -1202,7 +1216,8 @@ static int GpuEligible(void)
     if (dispcnt & 0x1000)
         for (int i = 0; i < sNTSpr; i++) {
             u8 fl = sTSpr[i].flags;
-            if (fl & (SF_AFFINE | SF_8BPP)) { sWhy[6]++; sWhy[8] += (fl & SF_AFFINE) != 0; sWhy[10] += (fl & SF_8BPP) != 0; return 0; }
+            if (fl & SF_8BPP) { sWhy[6]++; sWhy[10]++; return 0; }
+            if ((fl & SF_AFFINE) && ((fl & SF_SEMI) || !SheetFit(i))) { sWhy[6]++; sWhy[8]++; return 0; }
             if (fl & SF_SEMI) {
                 if ((R16(0x52) & 0x1F1F) != 0x1000 || ((R16(0x50) >> 8) & 0x1C) != 0x1C) { sWhy[9]++; return 0; }      // semi sprites are skipped (blend 0:16 = "show what is beneath"); other weights use the CPU path
                 if (SemiOverlaps(i)) { sWhy[11]++; return 0; }                    // a semi sprite replaces the sprites under it (see SemiOverlaps)
@@ -1269,6 +1284,8 @@ static void GpuFill(int depth, int stereo)
     }
     { int a = R16(0x52) & 0x1F, b = (R16(0x52) >> 8) & 0x1F; f->eva = a > 16 ? 16 : a; f->evb = b > 16 ? 16 : b; }
     { static u8 snap[0x8000]; memcpy(snap, gGbaVram + 0x10000, sizeof snap); f->objChr = snap; }
+    { const u16 *oam = (const u16 *)gGbaOam; for (int m = 0; m < 32; m++) { f->affPar[m][0] = (s16)oam[m * 16 + 3]; f->affPar[m][1] = (s16)oam[m * 16 + 7]; f->affPar[m][2] = (s16)oam[m * 16 + 11]; f->affPar[m][3] = (s16)oam[m * 16 + 15]; }
+      memcpy(f->sheetX, sSheetX, sizeof f->sheetX); memcpy(f->sheetY, sSheetY, sizeof f->sheetY); }
     { u16 bld = R16(0x50); int effect = (bld >> 6) & 3, evy = R16(0x54) & 0x1F; if (evy > 16) evy = 16;
       f->fade = effect >= 2 && evy ? effect - 1 : 0; f->evy = evy; }
     f->bandChanged = 0;

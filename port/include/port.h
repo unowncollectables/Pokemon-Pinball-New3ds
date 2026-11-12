@@ -58,6 +58,7 @@ extern u8 gPpuForceSlow;               // test switch: use the general renderer 
 typedef struct { s16 x, y; u8 w, h, prio, flags, aff, ui; u16 tile, palbase; } Spr;   // one sprite of the tall frame
 enum { SF_AFFINE = 1, SF_DOUBLE = 2, SF_H = 4, SF_V = 8, SF_8BPP = 16, SF_SEMI = 32 };
 #define LTEXW 512                      // row length of a layer texture: 256 map columns and the 240-pixel wrap-around copy, rounded up
+#define GPU_SHEET 512                  // side of the texture that holds the pictures of affine sprites
 #define BAND_ROWS 144                  // rows of the fixed band that BG0 covers
 typedef struct {
     int ui0;                           // tall row where the fixed band (BG0 and the UI sprites) sits
@@ -69,6 +70,8 @@ typedef struct {
     int stereo;                        // a right-eye picture is wanted
     int dx[2][4];                      // eye shift of BG1-BG3 and the world sprites: [0] left eye rows 0-239, [1] right eye
     const u8 *objChr;                  // the sprite tile memory (0x8000 bytes) as the frame saw it: the game rewrites it in its VBlank handler, before the GPU draws
+    s16 affPar[32][4];                 // affine matrices (PA PB PC PD) as the frame saw them
+    u16 sheetX[PORT_OAM_N], sheetY[PORT_OAM_N];   // where each affine sprite's picture sits in the sheet texture (its padding starts here)
     int fade, evy;                     // brightness fade over everything: 0 none, 1 towards white, 2 towards black; evy 1-16
     int eva, evb;                      // blend weights (0-16) of semi-transparent sprites
     int bandChanged;                   // the band picture differs from the last frame's
