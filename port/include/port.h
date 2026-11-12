@@ -54,8 +54,31 @@ void PpuLatchLine(int y);              // remembers this scanline's registers (t
 void PpuRenderTall(u16 *dst, u16 *right, int depth);          // GBA_W x TALL_H RGB565, from the latched registers
 extern u8 gPpuForceSlow;               // test switch: use the general renderer only
 
+// ---- GPU composition of the tall table (3DS: platform/gpucomp3ds.c; the CPU compose stays the reference) ----
+typedef struct { s16 x, y; u8 w, h, prio, flags, aff, ui; u16 tile, palbase; } Spr;   // one sprite of the tall frame
+enum { SF_AFFINE = 1, SF_DOUBLE = 2, SF_H = 4, SF_V = 8, SF_8BPP = 16, SF_SEMI = 32 };
+#define LTEXW 512                      // row length of a layer texture: 256 map columns and the 240-pixel wrap-around copy, rounded up
+#define BAND_ROWS 144                  // rows of the fixed band that BG0 covers
+typedef struct {
+    int ui0;                           // tall row where the fixed band (BG0 and the UI sprites) sits
+    u16 back;                          // backdrop colour, RGB565
+    u8 bgOn[4], bgPrio[4];             // BG0 (the band) to BG3
+    u16 scroll[4];                     // BG1-BG3: first column of the 240-pixel window in the layer texture
+    int nSpr; const Spr *spr;          // sprites in OAM order; of the same priority the last one is drawn first
+    int map1d;                         // OBJ tiles in 1D mapping
+    int stereo;                        // a right-eye picture is wanted
+    int dx[2][4];                      // eye shift of BG1-BG3 and the world sprites: [0] left eye rows 0-239, [1] right eye
+    int eva, evb;                      // blend weights (0-16) of semi-transparent sprites
+    int bandChanged;                   // the band picture differs from the last frame's
+} PpuGpuFrame;
+extern int gPpuGpuCompose;             // set by the platform: 0 off, 1 describe frames for the GPU and skip the CPU compose, 2 also compose on the CPU (to compare)
+void PpuGpuSetStage(u16 *layer[3], u16 *band);   // linear-memory RGBA5551 staging: three layers of LTEXW x 512, the band 256 x 256
+const PpuGpuFrame *PpuGpuFrameGet(void);         // NULL: this frame is not eligible, the CPU picture is the frame
+const u16 *PpuGpuLayerStage(int n, int *rowLo, int *rowHi);   // layer n (1-3): NULL when unchanged, else rows [rowLo,rowHi) (multiples of 8) are new
+const u16 *PpuPal565(void);
+
 // ---- Frame timing (perf.c) ---------------------------------------------
-enum { PERF_PPU, PERF_BLIT, PERF_VSYNC, PERF_SOUND, PERF_GPU, PERF_N };   // PERF_GPU: building and submitting the GPU frame (0 on the CPU presenter)
+enum { PERF_PPU, PERF_BLIT, PERF_VSYNC, PERF_SOUND, PERF_GPU, PERF_GPUC, PERF_N };   // PERF_GPU: building and submitting the presenter's GPU frame; PERF_GPUC: the CPU time of the GPU compose (0 when the CPU composes)
 #define PERF_WINDOW 120
 void PerfAdd(int section, u32 us);
 void PpuStats(unsigned *slowRows, unsigned *rebuilt, unsigned *bld, unsigned *disp, unsigned *mainUs, unsigned *waitUs);   // per-frame averages since the last call

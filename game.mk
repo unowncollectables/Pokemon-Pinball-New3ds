@@ -20,7 +20,7 @@ PORTCFLAGS := $(ARCH) -O2 -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter -I$(
 
 ifeq ($(PLATFORM),3ds)
 CC := arm-none-eabi-gcc
-PLAT_SRCS := $(PORT)/platform/ctr.c $(PORT)/platform/gpu3ds.c
+PLAT_SRCS := $(PORT)/platform/ctr.c $(PORT)/platform/gpu3ds.c $(PORT)/platform/gpucomp3ds.c
 PORTCFLAGS += -D__3DS__ -I$(DEVKITPRO)/libctru/include
 LDFLAGS := -specs=3dsx.specs $(ARCH) -L$(DEVKITPRO)/libctru/lib -Wl,--no-enum-size-warning
 LIBS := -lcitro3d -lctru -lm
