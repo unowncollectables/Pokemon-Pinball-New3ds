@@ -730,6 +730,8 @@ INL void FastBgT(Ctx *c, int n, int y, int track, int world)
 // buffer's tile when the layer is drawn.
 #define LIGHT_ROWS 64
 static struct { u8 on; u8 data[32]; } sLight[LIGHT_ROWS][32];
+static s8 sSlotRow[22] = { -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1 };   // board row the streamer last copied into each window slot (exact)
+static unsigned sStLampExact, sStLampGuess, sStLampDrop;   // diagnostics for the perf log
 static s8 sLightRow[704];              // per window tile: the board row it was assigned to (-1: none yet)
 static u32 sLightVer;
 static u8 sLightDirty[LIGHT_ROWS];     // board tile rows whose lamp pictures changed since the layer was last drawn
@@ -755,12 +757,28 @@ void PpuNoteTileWrite(const void *dest, const void *src, u32 bytes)
     const u8 *d = dest, *sr = src;
     if (d < gGbaVram + 0x8000 || d >= gGbaVram + 0x8000 + 704 * 32 || bytes > 0x400) return;
     if ((sr >= gBoardBGTileBuffer && sr < gBoardBGTileBuffer + 0x8000) ||
-        (sr >= gBoardBGTileBufferAlt && sr < gBoardBGTileBufferAlt + 0x8000)) return;   // the streamer itself
+        (sr >= gBoardBGTileBufferAlt && sr < gBoardBGTileBufferAlt + 0x8000)) {          // the streamer itself
+        u32 off = (u32)(d - (gGbaVram + 0x8000));
+        if (bytes == 0x400 && (off & 0x3FF) == 0 && off / 0x400 < 22) {
+            int alt = sr >= gBoardBGTileBufferAlt && sr < gBoardBGTileBufferAlt + 0x8000;
+            const u8 *base = alt ? gBoardBGTileBufferAlt : gBoardBGTileBuffer;
+            sSlotRow[off / 0x400] = (s8)((u32)(sr - base) / 0x400 + (alt ? 32 : 0));
+        }
+        return;
+    }
     u32 t0 = (u32)(d - (gGbaVram + 0x8000)) / 32;
     for (u32 i = 0; i * 32 < bytes && t0 + i < 704; i++) {
         u32 t = t0 + i, slot = t >> 5, col = t & 31;
         const u8 *w = d + i * 32;
-        int row = sLightRow[t];
+        int row = sSlotRow[slot];            // exact: the row the streamer put in this slot
+        if (row >= 0) {
+            // still require the picture to resemble that board tile: not every tile write here is a lamp
+            const u8 *b = BoardTile(row, col);
+            int eq = 0;
+            for (int k = 0; k < 32; k++) eq += b[k] == w[k];
+            if (eq <= 15) { sStLampDrop++; continue; }
+            sStLampExact++;
+        } else row = sLightRow[t];
         if (row < 0) {
             int best = -1, bestEq = 15;
             for (int r = ((int)slot + 12) % 22; r < LIGHT_ROWS; r += 22) {
@@ -769,7 +787,8 @@ void PpuNoteTileWrite(const void *dest, const void *src, u32 bytes)
                 for (int k = 0; k < 32; k++) eq += b[k] == w[k];
                 if (eq > bestEq) { bestEq = eq; best = r; }
             }
-            if (best < 0) continue;
+            if (best < 0) { sStLampDrop++; continue; }
+            sStLampGuess++;
             sLightRow[t] = (s8)(row = best);
         }
         if (!sLight[row][col].on || memcmp(sLight[row][col].data, w, 32)) {
@@ -1158,6 +1177,12 @@ void PpuRenderTall(u16 *dst, u16 *right, int depth)
 
 // Averages per frame since the last call, for the perf log: rows drawn on the slow blending path,
 // layer rows rebuilt, and the last blend and display control values seen on a slow row.
+void PpuLampStats(unsigned *exact, unsigned *guess, unsigned *drop)
+{
+    *exact = sStLampExact; *guess = sStLampGuess; *drop = sStLampDrop;
+    sStLampExact = sStLampGuess = sStLampDrop = 0;
+}
+
 void PpuStats(unsigned *slowRows, unsigned *rebuilt, unsigned *bld, unsigned *disp, unsigned *mainUs, unsigned *waitUs)
 {
     unsigned f = sStFrames ? sStFrames : 1;
