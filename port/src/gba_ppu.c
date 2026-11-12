@@ -492,20 +492,34 @@ static inline u16 Join(int r, int g, int b) { return (u16)((r << 11) | (((g << 1
 
 static __thread Ctx sCtx;
 
+// The game's own code only runs at VBlank, so palette and OAM can change inside the visible frame only through a VCount or
+// HBlank interrupt handler or an HBlank DMA. Without one of those they are compared with their shadow copies once per frame
+// (line 0) instead of on all 160 lines (about a third of the menu screens' time).
+static int sLineWatch;
+
 void PpuRenderLine(int y, u16 *dst)
 {
     sIo = gGbaIo;
     u16 dispcnt = R16(0);
+    if (y == 0) {
+        sLineWatch = (R16(4) & 0x30) != 0;                                   // VCount or HBlank interrupt enabled
+        for (int ch = 0; ch < 4; ch++) {
+            u16 cnt = R16(0xBA + 12 * ch);
+            if ((cnt & 0x8000) && ((cnt >> 12) & 3) == 2) sLineWatch = 1;    // DMA that starts at HBlank
+        }
+    }
+    if (!sCacheValid || y == 0 || sLineWatch) {
+        if (!sCacheValid || memcmp(sPalShadow, gGbaPltt, sizeof sPalShadow)) UpdatePal565();
+        if (!sCacheValid || memcmp(sOamShadow, gGbaOam, sizeof sOamShadow)) {
+            RebuildSprites();
+            memcpy(sOamShadow, gGbaOam, sizeof sOamShadow);
+        }
+        sCacheValid = 1;
+    }
     if (dispcnt & 0x80) {                              // forced blank shows white
         for (int x = 0; x < GBA_W; x++) dst[x] = 0xFFFF;
         return;
     }
-    if (!sCacheValid || memcmp(sPalShadow, gGbaPltt, sizeof sPalShadow)) UpdatePal565();
-    if (!sCacheValid || memcmp(sOamShadow, gGbaOam, sizeof sOamShadow)) {
-        RebuildSprites();
-        memcpy(sOamShadow, gGbaOam, sizeof sOamShadow);
-    }
-    sCacheValid = 1;
 
     u16 bld = R16(0x50);
     int effect = (bld >> 6) & 3, tgt1 = bld & 0x3F, tgt2 = (bld >> 8) & 0x3F;
