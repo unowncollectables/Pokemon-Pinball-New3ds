@@ -100,9 +100,11 @@ int GpuInit(void)
 {
     if (sState) return sState > 0;
     sState = -1;
-    char c = '1';
-    if (PlatFileRead("gpu.cfg", &c, 1) == 1 && c == '0') { PlatLog("gpu: off (gpu.cfg)"); return 0; }
-    if (PlatFileRead(GUARD_FILE, &c, 1) >= 0) {
+    gPortGpuActiveMode = '0';
+    const int mode = gPortGpuStarted;
+    if (mode == '0') { PlatLog("gpu: off (gpu.cfg)"); return 0; }
+    char guard;
+    if (PlatFileRead(GUARD_FILE, &guard, 1) >= 0) {
         GuardRemove();
         PlatLog("gpu: SAFE BOOT: the last boot with the GPU presenter never reached %d frames; CPU presenter for THIS boot only", GUARD_FRAMES);
         return 0;
@@ -162,11 +164,12 @@ int GpuInit(void)
     sState = 1;
     PlatLog("gpu: citro3d presenter ready");
     sCompose = 0;
-    if (c == '2' || c == '3') {
-        if (c == '2' && !(sCmpMem = malloc((5 * CMP_TALL + 2 * CMP_RIGHT) * 2))) PlatLog("gpu: no memory for compare mode");
-        else if (GpucInit(sUProj)) { sCompose = c == '3' ? 1 : 2; gPpuGpuCompose = c == '3' ? 1 : 2; PlatLog("gpu: GPU compose %s", c == '3' ? "on" : "in compare mode (CPU picture shown)"); }
+    if (mode == '2' || mode == '3') {
+        if (mode == '2' && !(sCmpMem = malloc((5 * CMP_TALL + 2 * CMP_RIGHT) * 2))) PlatLog("gpu: no memory for compare mode");
+        else if (GpucInit(sUProj)) { sCompose = mode == '3' ? 1 : 2; gPpuGpuCompose = sCompose; PlatLog("gpu: GPU compose %s", mode == '3' ? "on" : "in compare mode (CPU picture shown)"); }
         else PlatLog("gpu: GPU compose not available, CPU compose");
     }
+    gPortGpuActiveMode = sCompose ? mode : '1';
     return 1;
 fail:
     Teardown();

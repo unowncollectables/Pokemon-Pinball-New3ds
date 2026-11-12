@@ -37,9 +37,12 @@ your ROM, then adapts that tree and compiles it with the port. The
 [Pokémon 3DS Builder](https://github.com/unowncollectables/patch-builder)
 does all of this, tools included, from one window.
 
-Headless test build (needs `gcc-arm-linux-gnueabihf` and `qemu-user-static`):
+After running the build script, build the headless runner with
 `make -C build/game -f ../../game.mk PRET_TOOLS=../upstream/pokepinballrs/tools`
-then run `build/pinball_headless --frames 2000 --every 100 --out out` under `qemu-arm-static`.
+(requires `gcc-arm-linux-gnueabihf`). Run `python3 scripts/check_gameplay.py` with
+`qemu-arm` installed, or pass `--qemu qemu-arm-static`. The check plays both tables
+in both layouts, triggers the game's bonus entry and return routines in the
+headless build, and checks screen dumps and follow-camera movement.
 
 ## Build numbers
 
@@ -58,8 +61,13 @@ headless build: `PORT_NOTALL=1` draws the original 240x160 picture,
 
 ## On the console
 
-Files live in `sdmc:/3ds/pinball-rs/`: `pinball.sav`, `log.txt`, and
-`crash.txt` if something goes wrong.
+Files live in `sdmc:/3ds/pinball-rs/`: `pinball.sav`, `pinball.sav.bak` (the previous
+complete save), `log.txt`, and `crash.txt` if something goes wrong. If the main
+save is missing or incomplete, the port loads the backup and rewrites the main save.
+
+Tap **View** on the bottom settings panel to switch layouts. **Y** switches
+views during play. The renderer control shows the active table renderer and the
+setting saved for the next launch.
 
 The table screens (both views, with or without 3D) are put on the screens by the GPU:
 the CPU still composes the 240x480 table picture, the right-eye picture and our margin art,

@@ -99,6 +99,7 @@ void PortSaveInit(void);
 void PortSaveMarkDirty(void);
 void PortSaveTick(void);               // flushes a dirty save once writes go quiet
 void PortSaveFlushNow(void);
+#define PORT_SAVE_NAME "pinball.sav"
 
 // ---- Crash logger ----------------------------------------------------
 void CrashInit(void);
@@ -121,8 +122,15 @@ void PlatJobWait(void);                 // 3D slider, 0 (off) to 256
 
 // Screen layouts (layout.c): the tall picture is arranged into the two panel images.
 extern int gPortSeam;                 // following view: table rows hidden behind the gap between the screens (SELECT + up/down), 0-24
-extern int gPortGpuMode;              // '0' CPU only, '1' GPU presenter (default), '3' GPU also draws the table (gpu.cfg); changes apply at the next start
-extern int gPortGpuStarted;           // the mode this run started with
+extern int gPortGpuMode;              // saved selection for the next launch
+extern int gPortGpuStarted;           // selection captured at launch
+extern int gPortGpuActiveMode;        // initialized table renderer, or '?' before the first table
+#define MENU_BUTTON_LEFT 16
+#define MENU_BUTTON_RIGHT 304
+#define MENU_VIEW_TOP 150
+#define MENU_GPU_TOP 176
+#define MENU_VIEW_HEIGHT 20
+#define MENU_GPU_HEIGHT 28
 int  LayoutMenuActive(void);          // a menu or bonus screen is showing (the bottom screen is the settings panel)
 void LayoutMenuRefresh(void);         // repaint the menu panels after a setting changed
 extern int gPortView;                 // 0 = 1:1 with side panels, 1 = zoomed and following the ball

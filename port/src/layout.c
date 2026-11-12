@@ -399,6 +399,26 @@ void LayoutFrame(const u16 *tall, const u16 *right)
 
 #define MENU_X 80
 #define MENU_Y 40
+static void PaintMenuButton(int top, int height)
+{
+    const u16 face = Rgb(40, 56, 110), edge = Rgb(255, 214, 120);
+    for (int y = top; y < top + height; y++)
+        for (int x = MENU_BUTTON_LEFT; x < MENU_BUTTON_RIGHT; x++)
+            sBot[y * BW + x] = (y == top || y == top + height - 1
+                || x == MENU_BUTTON_LEFT || x == MENU_BUTTON_RIGHT - 1) ? edge : face;
+}
+
+static const char *GpuModeName(int mode)
+{
+    switch (mode) {
+    case '0': return "CPU";
+    case '1': return "GPU PRESENT";
+    case '2': return "GPU COMPARE";
+    case '3': return "GPU FULL";
+    default: return "AFTER TABLE LOAD";
+    }
+}
+
 static void PaintMenuPanels(int fill)
 {
     // top: the 240x160 picture sits at 1:1 in the middle (pixel for pixel, no scaling);
@@ -443,25 +463,27 @@ static void PaintMenuPanels(int fill)
     Text(sBot, BW, (BW - 17 * 6) / 2, 42, "RUBY AND SAPPHIRE", 1, soft);
     static const char *const rows[][2] = {
         { "L / R", "FLIPPERS" }, { "A", "LAUNCH AND SELECT" }, { "START", "PAUSE" },
-        { "Y", "WHOLE TABLE OR FOLLOW VIEW" }, { "3D SLIDER", "DEPTH" },
+        { "3D SLIDER", "DEPTH" },
     };
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 4; i++) {
         int y = 70 + i * 20;
         Text(sBot, BW, 24, y, rows[i][0], 2, key);
         Text(sBot, BW, 144, y + 4, rows[i][1], 1, white);
     }
-    {   // settings button: tap it (or SELECT and left/right) to change how much the GPU does; applies at the next start
-        const u16 face = Rgb(40, 56, 110), edge = Rgb(255, 214, 120);
-        for (int y = 172; y < 192; y++)
-            for (int x = 16; x < BW - 16; x++) sBot[y * BW + x] = (y == 172 || y == 191 || x == 16 || x == BW - 17) ? edge : face;
-        const char *label = gPortGpuMode == '0' ? "GPU OFF" : gPortGpuMode == '3' ? "GPU FULL" : "GPU PRESENT";
-        Text(sBot, BW, 24, 178, label, 1, white);
-        Text(sBot, BW, BW - 24 - 17 * 6, 178, gPortGpuMode == gPortGpuStarted ? "TAP TO CHANGE" : "RESTART TO APPLY", 1, key);
-    }
+    PaintMenuButton(MENU_VIEW_TOP, MENU_VIEW_HEIGHT);
+    Text(sBot, BW, 24, MENU_VIEW_TOP + 6, gPortView ? "VIEW: FOLLOW BALL" : "VIEW: WHOLE TABLE", 1, white);
+    Text(sBot, BW, 204, MENU_VIEW_TOP + 6, "TAP OR PRESS Y", 1, key);
+
+    PaintMenuButton(MENU_GPU_TOP, MENU_GPU_HEIGHT);
+    Text(sBot, BW, 24, MENU_GPU_TOP + 5, "ACTIVE:", 1, soft);
+    Text(sBot, BW, 72, MENU_GPU_TOP + 5, GpuModeName(gPortGpuActiveMode), 1, white);
+    Text(sBot, BW, 24, MENU_GPU_TOP + 16, "NEXT START:", 1, soft);
+    Text(sBot, BW, 96, MENU_GPU_TOP + 16, GpuModeName(gPortGpuMode), 1, white);
+    Text(sBot, BW, 204, MENU_GPU_TOP + 16, "TAP TO CHANGE", 1, key);
     // arcade trim: a neon frame with a bulb at every corner and along the top and bottom edges
     for (int x = 4; x < BW - 4; x++) { sBot[4 * BW + x] = sBot[(PH - 5) * BW + x] = Rgb(70, 130, 240); sBot[5 * BW + x] = sBot[(PH - 6) * BW + x] = Rgb(230, 70, 60); }
     for (int y = 4; y < PH - 4; y++) { sBot[y * BW + 4] = sBot[y * BW + BW - 5] = Rgb(70, 130, 240); sBot[y * BW + 5] = sBot[y * BW + BW - 6] = Rgb(230, 70, 60); }
-    Text(sBot, BW, (BW - 32 * 6) / 2, 200, "SELECT UP/DOWN SETS THE VIEW GAP", 1, soft);
+    Text(sBot, BW, (BW - 32 * 6) / 2, 210, "SELECT UP/DOWN SETS THE VIEW GAP", 1, soft);
     char b[40] = "BUILD ";
     int n = 6;
     for (const char *p = PORT_BUILD_ID; *p && *p != '-' && n < 38; p++) b[n++] = *p;
@@ -470,6 +492,7 @@ static void PaintMenuPanels(int fill)
 }
 
 int gPortGpuMode = '1', gPortGpuStarted = '1';
+int gPortGpuActiveMode = '?';
 int LayoutMenuActive(void) { return sMode == 0; }
 void LayoutMenuRefresh(void) { if (sMode == 0) { PaintMenuPanels(1); sDirty = 2; } }
 
