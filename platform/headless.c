@@ -13,6 +13,21 @@ static char sOut[256] = ".";
 static u32 sDump[4096]; static int sNumDump; static u32 sDumpEvery;
 static struct { u32 frame, len; u16 keys; } sKeys[4096]; static int sNumKeys;
 static FILE *sWav; static u32 sWavFrames; static int sWavRate;
+static int sBonusCheck, sTrace;
+
+int HeadlessBonusStep(int isBonusField)
+{
+    if (!sBonusCheck) return 0;
+    if (gPortFrame == 1300 && !isBonusField) {
+        PlatLog("check: enter bonus");
+        return 1;
+    }
+    if (gPortFrame == 1600 && isBonusField) {
+        PlatLog("check: leave bonus");
+        return 1;
+    }
+    return 0;
+}
 
 static u16 KeyBit(const char *n)
 {
@@ -23,6 +38,10 @@ static u16 KeyBit(const char *n)
 
 void PlatInit(int argc, char **argv)
 {
+    const char *view = getenv("PORT_VIEW");
+    if (view) gPortView = atoi(view);
+    sBonusCheck = getenv("PORT_TEST_BONUS") != NULL;
+    sTrace = getenv("PORT_TEST_TRACE") != NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--frames")) sMaxFrames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--out")) snprintf(sOut, sizeof sOut, "%s", argv[++i]);
@@ -74,7 +93,7 @@ u16 PlatKeys(void)
 
 static void DumpPpm(const u16 *fb, int h);
 static void DumpPanels(int withRight);
-void PlatPresent(const u16 *fb) { DumpPpm(fb, GBA_H); if (getenv("PORT_VIEW")) gPortView = atoi(getenv("PORT_VIEW")); LayoutMenuFrame(fb); DumpPanels(0); }
+void PlatPresent(const u16 *fb) { DumpPpm(fb, GBA_H); LayoutMenuFrame(fb); DumpPanels(0); }
 #include <pthread.h>
 static pthread_t sWorker;
 static pthread_mutex_t sMu = PTHREAD_MUTEX_INITIALIZER;
@@ -147,9 +166,14 @@ int PlatDepth(void) { const char *e = getenv("PORT_DEPTH"); return e ? atoi(e) :
 void PlatPresentTall(const u16 *fb, const u16 *right)
 {
     DumpPpm(fb, TALL_H);
-    if (getenv("PORT_VIEW")) gPortView = atoi(getenv("PORT_VIEW"));
     LayoutFrame(fb, right);
     DumpPanels(right != NULL);
+    if (sTrace) {
+        extern int gPortField, gPortBallY;
+        int row, moving;
+        LayoutFollowInfo(&row, &moving);
+        PlatLog("check: tall %u %d %d %d %d", gPortFrame, gPortField, gPortBallY, row, moving);
+    }
 }
 
 static void DumpPpm(const u16 *fb, int h)

@@ -2,33 +2,54 @@
 #include <string.h>
 #include "port.h"
 
-#define SAVE_NAME "pinball.sav"
 #define SAVE_SIZE 0x8000
 
 static int sDirty;
 static u32 sDirtyFrame;
+static u32 sFlushDelay;
 
 void PortSaveInit(void)
 {
     memset(gGbaSram, 0xFF, sizeof gGbaSram);
-    int n = PlatFileRead(SAVE_NAME, gGbaSram, SAVE_SIZE);
-    PlatLog("save: %s", n > 0 ? "loaded" : "none yet, starting fresh");
+    int n = PlatFileRead(PORT_SAVE_NAME, gGbaSram, SAVE_SIZE);
+    if (n == SAVE_SIZE) {
+        PlatLog("save: loaded");
+        return;
+    }
+    n = PlatFileRead(PORT_SAVE_NAME ".bak", gGbaSram, SAVE_SIZE);
+    if (n == SAVE_SIZE) {
+        PlatLog("save: recovered from backup");
+        PortSaveMarkDirty();
+        return;
+    }
+    memset(gGbaSram, 0xFF, SAVE_SIZE);
+    PlatLog("save: no complete save, starting fresh");
 }
 
-void PortSaveMarkDirty(void) { sDirty = 1; sDirtyFrame = gPortFrame; }
+void PortSaveMarkDirty(void)
+{
+    if (!sDirty) sFlushDelay = 3;
+    sDirty = 1;
+    sDirtyFrame = gPortFrame;
+}
 
 void PortSaveFlushNow(void)
 {
     if (!sDirty) return;
-    sDirty = 0;
-    if (PlatFileWrite(SAVE_NAME, gGbaSram, SAVE_SIZE) < 0) PlatLog("save: write failed");
+    if (PlatFileWrite(PORT_SAVE_NAME, gGbaSram, SAVE_SIZE) == SAVE_SIZE) {
+        sDirty = 0;
+    } else {
+        sDirtyFrame = gPortFrame;
+        sFlushDelay = 60;
+        PlatLog("save: write failed, will retry");
+    }
 }
 
 // The game writes a save as several small blocks; wait for a quiet moment
 // so one save is one file write.
 void PortSaveTick(void)
 {
-    if (sDirty && gPortFrame - sDirtyFrame >= 3) PortSaveFlushNow();
+    if (sDirty && gPortFrame - sDirtyFrame >= sFlushDelay) PortSaveFlushNow();
 }
 
 static void ReadSram(const u8 *src, u8 *dest, u32 size) { memcpy(dest, GbaXlat(src), size); }

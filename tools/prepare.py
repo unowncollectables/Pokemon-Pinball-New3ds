@@ -206,6 +206,23 @@ void PortOamYSub(void *o, int v);
     rsub(g, r"MPlayStart\(&gMPlayInfo_BGM, gCurrentPinballGame->savedBgmSongHeader\);",
          "MPlayStart(&gMPlayInfo_BGM, PortSongFromSave(gCurrentPinballGame->savedBgmSongHeader, gMain.selectedField));")
     rsub(g, r"\A", "const struct SongHeader *PortSongFromSave(const struct SongHeader *h, int field);\n")
+    rsub(g, r"(void PinballGameMain\(void\)\n\{\n)",
+         r"""\1#ifdef PORT_HEADLESS
+    extern int HeadlessBonusStep(int isBonusField);
+    if (gMain.subState == 1 && gCurrentPinballGame->fadeSubState == 1
+        && HeadlessBonusStep(gMain.isBonusField)) {
+        if (gMain.isBonusField) {
+            TransitionFromBonusToMainBoard();
+        } else {
+            gCurrentPinballGame->nextBonusField =
+                gMain.selectedField == FIELD_RUBY ? FIELD_KECLEON : FIELD_DUSCLOPS;
+            gCurrentPinballGame->bonusReturnState = BONUS_RETURN_LOCATION_CENTER_KICKOUT;
+            TransitionToBonusField();
+        }
+        return;
+    }
+#endif
+""")
     rsub(p("src/main.c"), r"\A", "void PortOamCopy(void);\nvoid PortUpdateTall(int on, int field, int ballY);\nvoid LayoutStats(unsigned lo, unsigned hi, int lives, int coins);\n")
     rsub(p("src/main.c"), r"^(\s*)gMainFuncs\[gMain.mainState\]\(\);",
          r"\1PortUpdateTall((gMain.mainState == STATE_GAME_MAIN || gMain.mainState == STATE_GAME_IDLE) && gMain.selectedField <= FIELD_SAPPHIRE, gMain.selectedField, ((gMain.mainState == STATE_GAME_MAIN || gMain.mainState == STATE_GAME_IDLE) && gCurrentPinballGame && gCurrentPinballGame->ball) ? gCurrentPinballGame->ball->positionQ0.y : -1);\n\1if ((gMain.mainState == STATE_GAME_MAIN || gMain.mainState == STATE_GAME_IDLE) && gCurrentPinballGame) LayoutStats(gCurrentPinballGame->scoreLo, gCurrentPinballGame->scoreHi, gCurrentPinballGame->numLives, gCurrentPinballGame->coins);\n\1gMainFuncs[gMain.mainState]();")

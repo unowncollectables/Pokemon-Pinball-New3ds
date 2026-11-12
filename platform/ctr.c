@@ -1,5 +1,6 @@
 // Nintendo 3DS platform layer (libctru).
 #include <3ds.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -204,13 +205,21 @@ void PlatJobWait(void) { LightEvent_Wait(&sDone); }
 // ---- input -------------------------------------------------------------
 static u16 sKeys;
 
-static void CycleGpuMode(int dir)               // 0 -> 1 -> 3 -> 0, saved at once, applied at the next start
+static void CycleGpuMode(int dir)
 {
-    static const char order[3] = { '0', '1', '3' };
-    int i = gPortGpuMode == '0' ? 0 : gPortGpuMode == '3' ? 2 : 1;
-    i = (i + dir + 3) % 3;
-    gPortGpuMode = order[i];
-    PlatFileWrite("gpu.cfg", &order[i], 1);
+    char next = '0' + (gPortGpuMode - '0' + dir + 4) % 4;
+    if (PlatFileWrite("gpu.cfg", &next, 1) != 1) {
+        PlatLog("gpu: could not save renderer setting");
+        return;
+    }
+    gPortGpuMode = next;
+    LayoutMenuRefresh();
+}
+
+static void ToggleView(void)
+{
+    gPortView ^= 1;
+    SaveView();
     LayoutMenuRefresh();
 }
 
@@ -221,12 +230,15 @@ int PlatPump(void)
     if (!aptMainLoop()) return 0;
     hidScanInput();
     if (sViewSaveAt && (int)gPortFrame >= sViewSaveAt) { sViewSaveAt = 0; WriteView(); }
-    if (hidKeysDown() & KEY_Y) { gPortView ^= 1; SaveView(); }
+    if (hidKeysDown() & KEY_Y) ToggleView();
     u32 k = hidKeysHeld();
     if (LayoutMenuActive()) {
         if (hidKeysDown() & KEY_TOUCH) {
             touchPosition t; hidTouchRead(&t);
-            if (t.py >= 172 && t.py < 192 && t.px >= 16 && t.px < 304) CycleGpuMode(1);
+            if (t.px >= MENU_BUTTON_LEFT && t.px < MENU_BUTTON_RIGHT) {
+                if (t.py >= MENU_VIEW_TOP && t.py < MENU_VIEW_TOP + MENU_VIEW_HEIGHT) ToggleView();
+                if (t.py >= MENU_GPU_TOP && t.py < MENU_GPU_TOP + MENU_GPU_HEIGHT) CycleGpuMode(1);
+            }
         }
         if (k & KEY_SELECT) {
             if (hidKeysDown() & KEY_DRIGHT) CycleGpuMode(1);
@@ -319,6 +331,23 @@ int PlatFileRead(const char *name, void *buf, size_t size)
     int n = fread(buf, 1, size, f); fclose(f); return n;
 }
 
+static int ReplaceSave(const char *path, const char *tmp, size_t size)
+{
+    struct stat info;
+    if (stat(path, &info) != 0) {
+        if (errno != ENOENT) return -1;
+    } else if (info.st_size >= (off_t)size) {
+        char backup[] = DATA_DIR "/" PORT_SAVE_NAME ".bak";
+        // The 3DS filesystem can require the destination to be absent.
+        if (remove(backup) != 0 && errno != ENOENT) return -1;
+        if (rename(path, backup) != 0) return -1;
+    } else if (remove(path) != 0) {
+        // Keep the backup when replacing an incomplete primary.
+        return -1;
+    }
+    return rename(tmp, path);
+}
+
 int PlatFileWrite(const char *name, const void *buf, size_t size)
 {
     char path[160], tmp[168];
@@ -326,10 +355,16 @@ int PlatFileWrite(const char *name, const void *buf, size_t size)
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     FILE *f = fopen(tmp, "wb"); if (!f) return -1;
     size_t n = fwrite(buf, 1, size, f);
-    fclose(f);
-    if (n != size) { remove(tmp); return -1; }
-    remove(path);                                   // write-then-rename: never a half-written save
-    if (rename(tmp, path) != 0) return -1;
+    int closed = fclose(f);
+    if (n != size || closed != 0) { remove(tmp); return -1; }
+    int result;
+    if (!strcmp(name, PORT_SAVE_NAME)) {
+        result = ReplaceSave(path, tmp, size);
+    } else {
+        result = remove(path);
+        if (result == 0 || errno == ENOENT) result = rename(tmp, path);
+    }
+    if (result != 0) { remove(tmp); return -1; }
     return (int)n;
 }
 
@@ -414,7 +449,11 @@ void PlatInit(int argc, char **argv)
     mkdir(DATA_DIR, 0777);
     sLog = fopen(DATA_DIR "/log.txt", "w");
 
-    { char c = '1'; if (PlatFileRead("gpu.cfg", &c, 1) == 1 && (c == '0' || c == '1' || c == '2' || c == '3')) gPortGpuMode = gPortGpuStarted = c == '2' ? '1' : c; }
+    char mode;
+    if (PlatFileRead("gpu.cfg", &mode, 1) == 1 && mode >= '0' && mode <= '3') {
+        gPortGpuMode = gPortGpuStarted = mode;
+        if (mode == '0') gPortGpuActiveMode = '0';
+    }
     { char v[2] = { 0, 0 }; int n = PlatFileRead("view.cfg", v, 2); if (n >= 1) gPortView = v[0] == '1'; if (n >= 2 && v[1] >= 'A' && v[1] <= 'A' + 24) gPortSeam = v[1] - 'A'; }
     ClearTop();
     AudioInit();

@@ -28,6 +28,7 @@ TARGET := $(PORT)/build/pinball3ds.elf
 SHADER_OBJS := $(OBJ)/platform/blit_shbin.o
 else
 CC := arm-linux-gnueabihf-gcc
+GAMECFLAGS += -DPORT_HEADLESS
 PLAT_SRCS := $(PORT)/platform/headless.c
 LDFLAGS := -static $(ARCH) -Wl,-z,noexecstack
 LIBS := -lm -lpthread
