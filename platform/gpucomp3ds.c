@@ -146,10 +146,11 @@ static void AtlasReset(void)
     sStResets++;
 }
 
+static const u8 *sObjChr;                // sprite tile memory of the frame being built
 static int AtlasSlot(unsigned tile, unsigned bank)
 {
     AEnt *e = &sTab[tile * 16 + bank];
-    const u8 *src = gGbaVram + 0x10000 + tile * 32;
+    const u8 *src = sObjChr + (tile & 0x3FF) * 32;
     const u16 *pal = PpuPal565() + 0x100 + bank * 16;
     if (e->used && !memcmp(e->raw, src, 32) && !memcmp(e->pal, pal + 1, 30)) return e->slot;
     if (!e->used) { e->used = 1; e->bank = (u8)bank; e->tile = (u16)tile; e->slot = (u16)sNextSlot++; }
@@ -164,6 +165,7 @@ static int AtlasSlot(unsigned tile, unsigned bank)
 static void BuildTiles(const PpuGpuFrame *f)
 {
     unsigned need = 0;
+    sObjChr = f->objChr;
     for (int i = 0; i < f->nSpr; i++) need += (f->spr[i].w >> 3) * (f->spr[i].h >> 3);
     if (sNextSlot + need > SLOTS) AtlasReset();
     sNq = 0;
@@ -386,7 +388,8 @@ static void Dump(const char *name, const u16 *img, int stride, int rows)
     PlatFileWrite(name, tmp, (size_t)rows * GBA_W * 2);
 }
 
-void GpucCompare(const u16 *cpuTall, const u16 *cpuRight, int stereo)
+static unsigned sCmpAltSum, sCmpAl[3];
+void GpucCompare(const u16 *cpuTall, const u16 *cpuRight, int stereo, const u16 *cpuAlt, const u16 *a1, const u16 *a2, const u16 *a3)
 {
     if (!sReady) return;
     if (!sRb) { sRb = linearAlloc(256 * 512 * 2); if (!sRb) return; }
@@ -394,6 +397,8 @@ void GpucCompare(const u16 *cpuTall, const u16 *cpuRight, int stereo)
     C3D_SyncDisplayTransfer((u32 *)sRtTexL.data, GX_BUFFER_DIM(256, 512), (u32 *)sRb, GX_BUFFER_DIM(256, 512), READBACK_FLAGS);
     GSPGPU_InvalidateDataCache(sRb, 256 * 512 * 2);
     Count(sRb, 256, cpuTall, TALL_H, &diff, &lo, &hi);
+    { const u16 *al[3] = { a1, a2, a3 }; for (int i = 0; i < 3; i++) { unsigned d3 = 0; int l3 = 9999, h3 = -1; Count(sRb, 256, al[i], TALL_H, &d3, &l3, &h3); sCmpAl[i] += d3; } }
+    if (cpuAlt) { unsigned d2 = 0; int l2 = 9999, h2 = -1; Count(sRb, 256, cpuAlt, TALL_H, &d2, &l2, &h2); sCmpAltSum += d2; }
     unsigned dumpDiff = diff;
     if (diff && diff > sCmpMax && sCmpDumps < 6) {
         char n1[24], n2[24];
@@ -412,9 +417,9 @@ void GpucCompare(const u16 *cpuTall, const u16 *cpuRight, int stereo)
     if (diff > sCmpMax) { sCmpMax = diff; sCmpWorstLo = (unsigned)lo; sCmpWorstHi = (unsigned)hi; }
     (void)dumpDiff;
     if (sCmpFrames >= 120) {
-        PlatLog("gpuc: compare %u frames: %u identical, avg %u px differ, worst %u px (rows %u-%u)",
-                sCmpFrames, sCmpSame, sCmpSum / sCmpFrames, sCmpMax, sCmpWorstLo, sCmpWorstHi);
-        sCmpFrames = sCmpSame = sCmpSum = 0; sCmpMax = 0;
+        PlatLog("gpuc: compare %u frames: %u identical, avg %u px differ, worst %u px (rows %u-%u), vs the CPU picture one present later: avg %u, 2/3/4 later: %u %u %u",
+                sCmpFrames, sCmpSame, sCmpSum / sCmpFrames, sCmpMax, sCmpWorstLo, sCmpWorstHi, sCmpAltSum / sCmpFrames, sCmpAl[0] / sCmpFrames, sCmpAl[1] / sCmpFrames, sCmpAl[2] / sCmpFrames);
+        sCmpFrames = sCmpSame = sCmpSum = 0; sCmpMax = 0; sCmpAltSum = 0; sCmpAl[0] = sCmpAl[1] = sCmpAl[2] = 0;
     }
 }
 

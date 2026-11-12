@@ -267,6 +267,7 @@ static inline u16 To565(u16 c)
     return (u16)((r << 11) | (((g << 1) | (g >> 4)) << 5) | b);
 }
 
+static int sBandPalDirty = 1;          // the palette changed since the band picture was drawn
 static u32 sPalChg[8];                 // background palette entries whose colour changed since the cached layers last looked
 
 // Reads the palette again and notes which background entries now show a different colour.
@@ -960,6 +961,7 @@ static void RefreshLayers(void)
         }
         if (palChanged) RefreshLayerColours(L, n);
     }
+    sBandPalDirty |= palChanged;
     memset(sPalChg, 0, sizeof sPalChg);
     sIo = gGbaIo;
 }
@@ -1197,7 +1199,7 @@ static int GpuEligible(void)
             u8 fl = sTSpr[i].flags;
             if (fl & (SF_AFFINE | SF_8BPP)) { sWhy[6]++; sWhy[8] += (fl & SF_AFFINE) != 0; sWhy[10] += (fl & SF_8BPP) != 0; return 0; }
             if (fl & SF_SEMI) {
-                if ((R16(0x52) & 0x1F1F) != 0x1000) { sWhy[9]++; return 0; }      // semi sprites are skipped (blend 0:16 = "show what is beneath"); other weights use the CPU path
+                if ((R16(0x52) & 0x1F1F) != 0x1000 || ((R16(0x50) >> 8) & 0x1C) != 0x1C) { sWhy[9]++; return 0; }      // semi sprites are skipped (blend 0:16 = "show what is beneath"); other weights use the CPU path
                 if (SemiOverlaps(i)) { sWhy[11]++; return 0; }                    // a semi sprite replaces the sprites under it (see SemiOverlaps)
             }
         }
@@ -1214,6 +1216,20 @@ static void RenderBand(void)
 {
     Ctx *c = &sCtx;
     int changed = 0;
+    // Nothing to draw again when BG0's control, map, tiles, per-line scroll and the palette are what they were.
+    {
+        static u16 bCnt; static u8 bMap[0x2000], bChr[0x4000]; static u8 bScroll[BAND_ROWS][4]; static int bValid;
+        u16 cnt = R16(0x08);
+        u32 maplen = (cnt >> 14) == 3 ? 0x2000 : ((cnt >> 14) ? 0x1000 : 0x800);
+        const u8 *map = gGbaVram + ((cnt >> 8) & 0x1F) * 0x800;
+        const u8 *chr = gGbaVram + ((cnt >> 2) & 3) * 0x4000;
+        int same = bValid && !sBandPalDirty && cnt == bCnt && !memcmp(bMap, map, maplen) && !memcmp(bChr, chr, 0x4000);
+        for (int y = 0; same && y < BAND_ROWS; y++) if (memcmp(bScroll[y], sLineRegs[y] + 0x10, 4)) same = 0;
+        if (same) { sGpuFrame.bandChanged = 0; return; }
+        bCnt = cnt; memcpy(bMap, map, maplen); memcpy(bChr, chr, 0x4000);
+        for (int y = 0; y < BAND_ROWS; y++) memcpy(bScroll[y], sLineRegs[y] + 0x10, 4);
+        bValid = 1; sBandPalDirty = 0;
+    }
     for (int y = 0; y < BAND_ROWS; y++) {
         sIo = sLineRegs[y];
         for (int i = 0; i < GBA_W + 16; i++) { sBandRowA[i] = 0x0000; sBandRowB[i] = 0xFFFF; }
@@ -1247,6 +1263,7 @@ static void GpuFill(int depth, int stereo)
         f->dx[0][i] = d; f->dx[1][i] = -d;
     }
     { int a = R16(0x52) & 0x1F, b = (R16(0x52) >> 8) & 0x1F; f->eva = a > 16 ? 16 : a; f->evb = b > 16 ? 16 : b; }
+    { static u8 snap[0x8000]; memcpy(snap, gGbaVram + 0x10000, sizeof snap); f->objChr = snap; }
     f->bandChanged = 0;
     if (f->bgOn[0]) RenderBand();
     sIo = gGbaIo;
@@ -1267,6 +1284,11 @@ void PpuRenderTall(u16 *dst, u16 *right, int depth)
     RefreshLayers();
     sStFrames++;
     sGpuFrameOk = 0;
+    { static unsigned lastBld[8]; unsigned cur[8]; static int logged; const int ln[8] = { 0, 10, 20, 40, 60, 90, 120, 150 };
+      for (int k = 0; k < 8; k++) cur[k] = *(const u16 *)(sLineRegs[ln[k]] + 0x50) | ((unsigned)*(const u16 *)(sLineRegs[ln[k]] + 0x52) << 16);
+      int diff = 0; for (int k = 1; k < 8; k++) if (cur[k] != cur[0]) diff = 1;
+      int chg = memcmp(cur, lastBld, sizeof cur) != 0; memcpy(lastBld, cur, sizeof cur);
+      if ((diff || chg) && logged < 60) { logged++; PlatLog("ppu: bld/alpha per line 0/10/20/40/60/90/120/150: %08x %08x %08x %08x %08x %08x %08x %08x frame %u", cur[0], cur[1], cur[2], cur[3], cur[4], cur[5], cur[6], cur[7], (unsigned)gPortFrame); } }
     if (gPpuGpuCompose) { static int n; if (++n % 240 == 0) PlatLog("ppu: gpu-ineligible reasons %u %u %u %u %u %u %u", sWhy[1], sWhy[2], sWhy[3], sWhy[4], sWhy[5], sWhy[6], sWhy[7]); if (n % 240 == 0) PlatLog("ppu: ineligible sprite flags affine %u alpha %u 8bpp %u semi-overlap %u frames %u", sWhy[8], sWhy[9], sWhy[10], sWhy[11], (unsigned)gPortFrame); }
     if (gPpuGpuCompose && GpuEligible()) {
         GpuFill(depth, depth > 0 && right != NULL);

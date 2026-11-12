@@ -16,7 +16,7 @@ C3D_Tex *GpucTall(void);                        // 256x512 RGB565, the picture i
 C3D_Tex *GpucRight(void);                       // 256x256 RGB565, rows 0-239
 // Compare mode: reads the render targets back (call after the frame that drew them has finished) and counts the pixels that
 // differ from the CPU picture of that frame; logs a summary every 120 frames and dumps the worst frame to the SD card.
-void GpucCompare(const u16 *cpuTall, const u16 *cpuRight, int stereo);
+void GpucCompare(const u16 *cpuTall, const u16 *cpuRight, int stereo, const u16 *cpuAlt, const u16 *a1, const u16 *a2, const u16 *a3);
 void GpucStats(void);                           // logs the compose statistics (once per perf window)
 void GpucShutdown(void);
 

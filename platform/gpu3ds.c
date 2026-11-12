@@ -5,6 +5,7 @@
 #include <string.h>
 #include "gpu3ds.h"
 #include "gpucomp3ds.h"
+#include <stdlib.h>
 
 extern const unsigned char blit_shbin[];        // the vertex shader, assembled and embedded by game.mk
 extern const unsigned int blit_shbin_size;
@@ -57,13 +58,24 @@ static int sArtUploaded;                        // the margin art textures hold 
 // GPU composition (gpucomp3ds.c). gpu.cfg: '1' presenter only (default), '3' + the GPU draws BG1-3 and the sprites,
 // '2' compare mode: the CPU picture is shown and the GPU picture is checked against it frame by frame (see GpucCompare).
 static int sCompose;                            // 0 off, 1 GPU picture shown, 2 compare
-static u16 sPrevTall[GBA_W * TALL_H], sPrevRight[GBA_W * 240];
+// compare mode only: the CPU pictures of the last presents (allocated when compare mode starts)
+#define CMP_TALL (GBA_W * TALL_H)
+#define CMP_RIGHT (GBA_W * 240)
+static u16 *sCmpMem;
+#define sPrevTall (sCmpMem)
+#define sPrev2Tall (sCmpMem + CMP_TALL)
+#define sHist0 (sCmpMem + 2 * CMP_TALL)
+#define sHist1 (sCmpMem + 3 * CMP_TALL)
+#define sHist2 (sCmpMem + 4 * CMP_TALL)
+#define sPrevRight (sCmpMem + 5 * CMP_TALL)
+#define sPrev2Right (sCmpMem + 5 * CMP_TALL + CMP_RIGHT)
+static int sPrev2Ok, sPrev2Stereo;
 static int sPrevOk, sPrevStereo;
 static unsigned sFrameNo;
 
 static void Teardown(void)
 {
-    GpucShutdown();
+    GpucShutdown(); free(sCmpMem); sCmpMem = NULL;
     gPpuGpuCompose = 0;
     if (sTopL) C3D_RenderTargetDelete(sTopL);
     if (sTopR) C3D_RenderTargetDelete(sTopR);
@@ -151,7 +163,8 @@ int GpuInit(void)
     PlatLog("gpu: citro3d presenter ready");
     sCompose = 0;
     if (c == '2' || c == '3') {
-        if (GpucInit(sUProj)) { sCompose = c == '3' ? 1 : 2; gPpuGpuCompose = c == '3' ? 1 : 2; PlatLog("gpu: GPU compose %s", c == '3' ? "on" : "in compare mode (CPU picture shown)"); }
+        if (c == '2' && !(sCmpMem = malloc((5 * CMP_TALL + 2 * CMP_RIGHT) * 2))) PlatLog("gpu: no memory for compare mode");
+        else if (GpucInit(sUProj)) { sCompose = c == '3' ? 1 : 2; gPpuGpuCompose = c == '3' ? 1 : 2; PlatLog("gpu: GPU compose %s", c == '3' ? "on" : "in compare mode (CPU picture shown)"); }
         else PlatLog("gpu: GPU compose not available, CPU compose");
     }
     return 1;
@@ -231,7 +244,9 @@ void GpuPresentTall(const u16 *tall, const u16 *right)
     // GPU compose: BG1-BG3 and the sprites into the render-target textures. In compare mode the previous frame, which the GPU has
     // finished by now, is read back and checked against the CPU picture it was meant to equal; the CPU picture stays on screen.
     u32 tComp = 0;
-    if (sCompose == 2 && sPrevOk) GpucCompare(sPrevTall, sPrevRight, sPrevStereo);
+    // The GPU runs one frame behind the CPU: what is in the render target now was composed for the CPU picture from two presents ago.
+    if (sCompose == 2 && sPrev2Ok) GpucCompare(sPrev2Tall, sPrev2Right, sPrev2Stereo, sPrevTall, sHist0, sHist1, sHist2);
+    sPrev2Ok = sPrevOk;
     sPrevOk = 0;
     if (gf) {
         u32 tc0 = PlatTicksUs();
@@ -239,9 +254,12 @@ void GpuPresentTall(const u16 *tall, const u16 *right)
         tComp = PlatTicksUs() - tc0;
         PerfAdd(PERF_GPUC, tComp);
         if (ok && sCompose == 2) {
-            memcpy(sPrevTall, tall, sizeof sPrevTall);
+            memcpy(sHist2, sHist1, CMP_TALL * 2); memcpy(sHist1, sHist0, CMP_TALL * 2); memcpy(sHist0, sPrev2Tall, CMP_TALL * 2);
+            memcpy(sPrev2Tall, sPrevTall, CMP_TALL * 2); memcpy(sPrev2Right, sPrevRight, CMP_RIGHT * 2);
+            sPrev2Stereo = sPrevStereo;
+            memcpy(sPrevTall, tall, CMP_TALL * 2);
             sPrevStereo = right != NULL;
-            if (right) memcpy(sPrevRight, right, sizeof sPrevRight);
+            if (right) memcpy(sPrevRight, right, CMP_RIGHT * 2);
             sPrevOk = 1;
         }
     }

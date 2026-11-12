@@ -68,6 +68,7 @@ typedef struct {
     int map1d;                         // OBJ tiles in 1D mapping
     int stereo;                        // a right-eye picture is wanted
     int dx[2][4];                      // eye shift of BG1-BG3 and the world sprites: [0] left eye rows 0-239, [1] right eye
+    const u8 *objChr;                  // the sprite tile memory (0x8000 bytes) as the frame saw it: the game rewrites it in its VBlank handler, before the GPU draws
     int eva, evb;                      // blend weights (0-16) of semi-transparent sprites
     int bandChanged;                   // the band picture differs from the last frame's
 } PpuGpuFrame;
