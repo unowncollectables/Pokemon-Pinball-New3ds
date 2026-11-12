@@ -42,13 +42,14 @@
 typedef struct { float x, y, z, u, v; } Vtx;
 typedef struct { s16 x, y; u16 slot; u8 flip, ui; } SQ;          // one 8x8 sprite tile, position before the eye shift
 typedef struct { u8 used; u8 bank; u16 slot; u16 tile; u16 pad; u32 raw[8]; u16 pal[15]; u16 pad2; } AEnt;
-// mode 0: drawn over what is there. 2: semi sprite tiles in a sprite buffer (they clear it: they hide the sprites under them).
+// mode 5: the fade quad (blended by evy). mode 0: drawn over what is there. 2: semi sprite tiles in a sprite buffer (they clear it: they hide the sprites under them).
 // 3: switch to the sprite buffer and clear it. 4: switch back to the picture.
 typedef struct { C3D_Tex *tex; int first, count; int mode; } Op;
 static float sZ = 0.5f;
 
 static int sReady, sUProj;
-static C3D_Tex sLayerTex[3], sBandTex, sAtlas, sRtTexL, sRtTexR, sBackTex, sSprTex;
+static C3D_Tex sLayerTex[3], sBandTex, sAtlas, sRtTexL, sRtTexR, sBackTex, sSprTex, sFadeTex;
+static int sFadeKind;                    // what sFadeTex holds: 0 nothing yet, 1 white, 2 black
 static C3D_RenderTarget *sRtS;           // the sprite buffer: one priority level of sprites, RGBA, for levels that hold semi sprites
 static int sBackKnown; static u16 sBackCol;
 static C3D_RenderTarget *sRtL, *sRtR;
@@ -92,6 +93,8 @@ int GpucInit(int uProj)
     }
     if (!C3D_TexInit(&sBandTex, 256, 256, GPU_RGBA5551) || !C3D_TexInit(&sAtlas, AW, AH, GPU_RGBA5551)) { PlatLog("gpuc: band/atlas texture failed"); return 0; }
     if (!C3D_TexInit(&sBackTex, 8, 8, GPU_RGBA5551)) { PlatLog("gpuc: backdrop texture failed"); return 0; }
+    if (!C3D_TexInit(&sFadeTex, 8, 8, GPU_RGBA5551)) { PlatLog("gpuc: fade texture failed"); return 0; }
+    C3D_TexSetFilter(&sFadeTex, GPU_NEAREST, GPU_NEAREST); C3D_TexSetWrap(&sFadeTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     C3D_TexSetFilter(&sBackTex, GPU_NEAREST, GPU_NEAREST); C3D_TexSetWrap(&sBackTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     C3D_TexSetFilter(&sBandTex, GPU_NEAREST, GPU_NEAREST); C3D_TexSetWrap(&sBandTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     C3D_TexSetFilter(&sAtlas, GPU_NEAREST, GPU_NEAREST);   C3D_TexSetWrap(&sAtlas, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
@@ -283,8 +286,14 @@ static void Pass(const PpuGpuFrame *f, const int *dx, int rlo, int rhi, Op *ops,
             PushOp(ops, nops, &sSprTex, first);
         }
     }
+    if (f->fade) {                                           // brightness fade of everything drawn so far
+        int first = sNv;
+        Rect(0, (float)rlo, 240, (float)rhi, 0.5f, 0.5f, 0.5f, 0.5f, (float)rlo, (float)rhi);
+        if (sNv > first && *nops < MAXOPS) { ops[*nops] = (Op){ &sFadeTex, first, sNv - first, 5 }; (*nops)++; }
+    }
 }
 
+static int sFadeEvy;
 static void Run(const Op *ops, int n, C3D_RenderTarget *rt, const C3D_Mtx *proj)
 {
     int blendZero = 0;
@@ -299,6 +308,14 @@ static void Run(const Op *ops, int n, C3D_RenderTarget *rt, const C3D_Mtx *proj)
         if (m == 3) {                                    // into the sprite buffer, cleared (every channel 0)
             C3D_FrameDrawOn(sRtS);
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sUProj, &sProjL);
+        }
+        if (m == 5) {                                    // result = fade colour * evy/16 + what is there * (1 - evy/16)
+            C3D_BlendingColor((u32)(sFadeEvy * 255 / 16) << 24);
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_ALPHA, GPU_ONE_MINUS_CONSTANT_ALPHA, GPU_CONSTANT_ALPHA, GPU_ONE_MINUS_CONSTANT_ALPHA);
+            C3D_TexBind(0, ops[i].tex);
+            C3D_DrawArrays(GPU_TRIANGLES, ops[i].first, ops[i].count);
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+            continue;
         }
         int wantZero = m == 2 || m == 3;
         if (wantZero != blendZero) {
@@ -335,6 +352,13 @@ int GpucCompose(const PpuGpuFrame *f)
         GSPGPU_FlushDataCache(sBackTex.data, 128);
         sBackCol = f->back; sBackKnown = 1;
     }
+    if (f->fade && sFadeKind != f->fade) {
+        u16 v = f->fade == 1 ? 0xFFFF : 0x0001;
+        for (int i = 0; i < 64; i++) ((u16 *)sFadeTex.data)[i] = v;
+        GSPGPU_FlushDataCache(sFadeTex.data, 128);
+        sFadeKind = f->fade;
+    }
+    sFadeEvy = f->evy;
     // 2. sprite tiles into the atlas
     BuildTiles(f);
     // 3. draw lists: one pass for a mono frame, three for stereo (left eye rows 0-239, flat rows 240-479, right eye rows 0-239)
@@ -357,12 +381,12 @@ int GpucCompose(const PpuGpuFrame *f)
     BufInfo_Add(bi, sVb, sizeof(Vtx), 2, 0x10);
     C3D_AlphaTest(true, GPU_GREATER, 0);
     u32 clr = sDbg == '1' ? 0xFF00FFFFu : ClearColor(f->back);       // '1': magenta, nothing drawn (is the render target read back at all?)
-    C3D_RenderTargetClear(sRtL, C3D_CLEAR_COLOR, clr, 0);
+    if (sDbg == 0x31) C3D_RenderTargetClear(sRtL, C3D_CLEAR_COLOR, clr, 0);   // the backdrop quad covers every drawn row; the clear is only for the dbg 1 test
     C3D_FrameDrawOn(sRtL);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sUProj, &sProjL);
     if (sDbg != '1') { Run(opsA, nA, sRtL, &sProjL); Run(opsB, nB, sRtL, &sProjL); }
     if (f->stereo) {
-        C3D_RenderTargetClear(sRtR, C3D_CLEAR_COLOR, clr, 0);
+        if (sDbg == 0x31) C3D_RenderTargetClear(sRtR, C3D_CLEAR_COLOR, clr, 0);
         C3D_FrameDrawOn(sRtR);
         C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sUProj, &sProjR);
         if (sDbg != '1') Run(opsC, nC, sRtR, &sProjR);
@@ -400,6 +424,7 @@ void GpucCompare(const u16 *cpuTall, const u16 *cpuRight, int stereo, const u16 
     { const u16 *al[3] = { a1, a2, a3 }; for (int i = 0; i < 3; i++) { unsigned d3 = 0; int l3 = 9999, h3 = -1; Count(sRb, 256, al[i], TALL_H, &d3, &l3, &h3); sCmpAl[i] += d3; } }
     if (cpuAlt) { unsigned d2 = 0; int l2 = 9999, h2 = -1; Count(sRb, 256, cpuAlt, TALL_H, &d2, &l2, &h2); sCmpAltSum += d2; }
     unsigned dumpDiff = diff;
+    { static int fd; if (diff > 20000 && diff < 115000 && fd < 1) { fd++; Dump("cmpF_cpu.bin", cpuTall, GBA_W, TALL_H); Dump("cmpF_gpu.bin", sRb, 256, TALL_H); PlatLog("gpuc: dumped a large-difference frame cmpF (%u px)", diff); } }
     if (diff && diff > sCmpMax && sCmpDumps < 6) {
         char n1[24], n2[24];
         snprintf(n1, sizeof n1, "cmp%u_cpu.bin", sCmpDumps); snprintf(n2, sizeof n2, "cmp%u_gpu.bin", sCmpDumps);
@@ -410,7 +435,11 @@ void GpucCompare(const u16 *cpuTall, const u16 *cpuRight, int stereo, const u16 
     if (stereo && cpuRight) {
         C3D_SyncDisplayTransfer((u32 *)sRtTexR.data, GX_BUFFER_DIM(256, 256), (u32 *)sRb, GX_BUFFER_DIM(256, 256), READBACK_FLAGS);
         GSPGPU_InvalidateDataCache(sRb, 256 * 256 * 2);
-        Count(sRb, 256, cpuRight, 240, &diff, &lo, &hi);
+        unsigned dR = 0; int lR = 9999, hR = -1;
+        Count(sRb, 256, cpuRight, 240, &dR, &lR, &hR);
+        { static unsigned rd; static unsigned acc, nacc; acc += dR; if (++nacc % 120 == 0) { PlatLog("gpuc: right eye avg %u px differ", acc / 120); acc = 0; }
+          if (dR && rd < 2) { char a[24], b[24]; snprintf(a, sizeof a, "cmpR%u_cpu.bin", rd); snprintf(b, sizeof b, "cmpR%u_gpu.bin", rd); Dump(a, cpuRight, GBA_W, 240); Dump(b, sRb, 256, 240); rd++; PlatLog("gpuc: dumped %s / %s (%u px, rows %d-%d)", a, b, dR, lR, hR); } }
+        diff += dR;
     }
     sCmpFrames++; sCmpSum += diff;
     if (!diff) sCmpSame++;

@@ -1187,7 +1187,12 @@ static int GpuEligible(void)
     sIo = sLineRegs[0];
     u16 dispcnt = R16(0);
     if (dispcnt & 0xE080) { sWhy[1]++; return 0; }                              // forced blank, windows
-    if ((R16(0x50) >> 6) & 3) { sWhy[2]++; return 0; }                          // blending, fades
+    {   // alpha blending is not drawn by the GPU; a brightness fade of everything (all six targets) is, as one blended quad
+        u16 bld = R16(0x50); int effect = (bld >> 6) & 3;
+        if (effect == 1 || (effect >= 2 && (bld & 0x3F) != 0x3F)) { sWhy[2]++; return 0; }
+        if (effect >= 2 && (dispcnt & 0x1000))
+            for (int i = 0; i < sNTSpr; i++) if (sTSpr[i].flags & SF_SEMI) { sWhy[2]++; return 0; }   // semi sprites that blend skip the fade on the CPU path
+    }
     for (int n = 0; n < 4; n++)
         if ((dispcnt & (0x100 << n)) && (R16(0x08 + n * 2) & 0x40) && (R16(0x4C) & 0xFF)) { sWhy[3]++; return 0; }     // mosaic
     for (int n = 1; n <= 3; n++)
@@ -1264,6 +1269,8 @@ static void GpuFill(int depth, int stereo)
     }
     { int a = R16(0x52) & 0x1F, b = (R16(0x52) >> 8) & 0x1F; f->eva = a > 16 ? 16 : a; f->evb = b > 16 ? 16 : b; }
     { static u8 snap[0x8000]; memcpy(snap, gGbaVram + 0x10000, sizeof snap); f->objChr = snap; }
+    { u16 bld = R16(0x50); int effect = (bld >> 6) & 3, evy = R16(0x54) & 0x1F; if (evy > 16) evy = 16;
+      f->fade = effect >= 2 && evy ? effect - 1 : 0; f->evy = evy; }
     f->bandChanged = 0;
     if (f->bgOn[0]) RenderBand();
     sIo = gGbaIo;
