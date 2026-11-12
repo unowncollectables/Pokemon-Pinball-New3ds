@@ -70,6 +70,16 @@ back to the CPU presenter in `platform/ctr.c`; to force that, put a `0` in `sdmc
 A boot guard (`gpu.pending`, removed after 600 good GPU frames or on a clean exit) means a GPU path that hangs or
 crashes on a console cannot lock the game out: the next boot logs `gpu: SAFE BOOT` and uses the CPU presenter once.
 `log.txt` shows `gpu: citro3d presenter ready` (or why not) and a `gpu` column in the perf lines.
+
+**GPU compositor (experimental, off by default).** `platform/gpucomp3ds.c` draws the table itself on the GPU, SoulSilver style:
+the three cached background layers become RGBA5551 textures that are re-uploaded only for the rows that changed, sprite tiles go
+through an atlas keyed by (VRAM tile, palette bank) and are drawn as quads in priority order, the fixed UI band is a small texture,
+and each eye is the same scene shifted per layer. Frames outside the simple subset (blending or fades, mosaic, windows,
+affine or 8bpp sprites, per-line register changes other than BG0 scroll, semi sprites with blend weights other than 0:16, or a
+semi sprite over a sprite of a lower priority level) are drawn by the CPU as before. `gpu.cfg`: `3` = GPU compositor shown,
+`2` = compare mode (the CPU picture is shown and the GPU picture is checked against it, with `cmpN_cpu.bin`/`cmpN_gpu.bin` dumps
+of the worst frames and a `gpuc: compare` line in the log), `1` = presenter only (default). The `gc` column in the perf lines is
+the compose time. `gpuc.dbg` holds one debug character (`1` clear colour only, `2`-`4` leave out BG1-BG3, `5` no sprites, `8` sprites only).
 Menus and bonus stages still use the CPU presenter, and the headless build always does.
 
 ## What comes from where

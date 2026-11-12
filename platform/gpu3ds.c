@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "gpu3ds.h"
+#include "gpucomp3ds.h"
+#include <stdlib.h>
 
 extern const unsigned char blit_shbin[];        // the vertex shader, assembled and embedded by game.mk
 extern const unsigned int blit_shbin_size;
@@ -53,8 +55,28 @@ static int sUProj;
 static C3D_Mtx sProjTop, sProjBot;
 static int sArtUploaded;                        // the margin art textures hold real art
 
+// GPU composition (gpucomp3ds.c). gpu.cfg: '1' presenter only (default), '3' + the GPU draws BG1-3 and the sprites,
+// '2' compare mode: the CPU picture is shown and the GPU picture is checked against it frame by frame (see GpucCompare).
+static int sCompose;                            // 0 off, 1 GPU picture shown, 2 compare
+// compare mode only: the CPU pictures of the last presents (allocated when compare mode starts)
+#define CMP_TALL (GBA_W * TALL_H)
+#define CMP_RIGHT (GBA_W * 240)
+static u16 *sCmpMem;
+#define sPrevTall (sCmpMem)
+#define sPrev2Tall (sCmpMem + CMP_TALL)
+#define sHist0 (sCmpMem + 2 * CMP_TALL)
+#define sHist1 (sCmpMem + 3 * CMP_TALL)
+#define sHist2 (sCmpMem + 4 * CMP_TALL)
+#define sPrevRight (sCmpMem + 5 * CMP_TALL)
+#define sPrev2Right (sCmpMem + 5 * CMP_TALL + CMP_RIGHT)
+static int sPrev2Ok, sPrev2Stereo;
+static int sPrevOk, sPrevStereo;
+static unsigned sFrameNo;
+
 static void Teardown(void)
 {
+    GpucShutdown(); free(sCmpMem); sCmpMem = NULL;
+    gPpuGpuCompose = 0;
     if (sTopL) C3D_RenderTargetDelete(sTopL);
     if (sTopR) C3D_RenderTargetDelete(sTopR);
     if (sBot) C3D_RenderTargetDelete(sBot);
@@ -131,6 +153,7 @@ int GpuInit(void)
     C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     C3D_CullFace(GPU_CULL_NONE);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
 
     Mtx_OrthoTilt(&sProjTop, 0.0f, 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
@@ -138,6 +161,12 @@ int GpuInit(void)
 
     sState = 1;
     PlatLog("gpu: citro3d presenter ready");
+    sCompose = 0;
+    if (c == '2' || c == '3') {
+        if (c == '2' && !(sCmpMem = malloc((5 * CMP_TALL + 2 * CMP_RIGHT) * 2))) PlatLog("gpu: no memory for compare mode");
+        else if (GpucInit(sUProj)) { sCompose = c == '3' ? 1 : 2; gPpuGpuCompose = c == '3' ? 1 : 2; PlatLog("gpu: GPU compose %s", c == '3' ? "on" : "in compare mode (CPU picture shown)"); }
+        else PlatLog("gpu: GPU compose not available, CPU compose");
+    }
     return 1;
 fail:
     Teardown();
@@ -187,8 +216,12 @@ static void Run(const Draw *d, int n)
 void GpuPresentTall(const u16 *tall, const u16 *right)
 {
     u32 t0 = PlatTicksUs();
-    StageRows(sStageTall, TEX_TALL_W, tall, GBA_W, TALL_H);
-    if (right) StageRows(sStageRight, TEX_TALL_W, right, GBA_W, TEX_RIGHT_H - 16);   // the right eye picture is 240 rows
+    const PpuGpuFrame *gf = sCompose ? PpuGpuFrameGet() : NULL;      // NULL: the CPU composed this frame
+    const int useGpu = gf && sCompose == 1;                          // the picture on the screens is the GPU's
+    if (!useGpu) {
+        StageRows(sStageTall, TEX_TALL_W, tall, GBA_W, TALL_H);
+        if (right) StageRows(sStageRight, TEX_TALL_W, right, GBA_W, TEX_RIGHT_H - 16);   // the right eye picture is 240 rows
+    }
     int art = LayoutMarginsDirty() || !sArtUploaded;
     if (art) {
         StageRows(sStageTop, TEX_ART_W, LayoutTop(), 400, 240);
@@ -202,9 +235,41 @@ void GpuPresentTall(const u16 *tall, const u16 *right)
     u32 t2 = PlatTicksUs();
     PerfAdd(PERF_VSYNC, t2 - t1);
 
-    Upload(&sTall, sStageTall, TEX_TALL_W, TEX_TALL_H);
-    if (right) Upload(&sRight, sStageRight, TEX_TALL_W, TEX_RIGHT_H);
+    if (!useGpu) {
+        Upload(&sTall, sStageTall, TEX_TALL_W, TEX_TALL_H);
+        if (right) Upload(&sRight, sStageRight, TEX_TALL_W, TEX_RIGHT_H);
+    }
     if (art) { Upload(&sArtTop, sStageTop, TEX_ART_W, TEX_ART_H); Upload(&sArtBot, sStageBot, TEX_ART_W, TEX_ART_H); sArtUploaded = 1; }
+
+    // GPU compose: BG1-BG3 and the sprites into the render-target textures. In compare mode the previous frame, which the GPU has
+    // finished by now, is read back and checked against the CPU picture it was meant to equal; the CPU picture stays on screen.
+    u32 tComp = 0;
+    // The GPU runs one frame behind the CPU: what is in the render target now was composed for the CPU picture from two presents ago.
+    if (sCompose == 2 && sPrev2Ok) GpucCompare(sPrev2Tall, sPrev2Right, sPrev2Stereo, sPrevTall, sHist0, sHist1, sHist2);
+    sPrev2Ok = sPrevOk;
+    sPrevOk = 0;
+    if (gf) {
+        u32 tc0 = PlatTicksUs();
+        int ok = GpucCompose(gf);
+        tComp = PlatTicksUs() - tc0;
+        PerfAdd(PERF_GPUC, tComp);
+        if (ok && sCompose == 2) {
+            memcpy(sHist2, sHist1, CMP_TALL * 2); memcpy(sHist1, sHist0, CMP_TALL * 2); memcpy(sHist0, sPrev2Tall, CMP_TALL * 2);
+            memcpy(sPrev2Tall, sPrevTall, CMP_TALL * 2); memcpy(sPrev2Right, sPrevRight, CMP_RIGHT * 2);
+            sPrev2Stereo = sPrevStereo;
+            memcpy(sPrevTall, tall, CMP_TALL * 2);
+            sPrevStereo = right != NULL;
+            if (right) memcpy(sPrevRight, right, CMP_RIGHT * 2);
+            sPrevOk = 1;
+        }
+    }
+    if (sCompose && ++sFrameNo % 120 == 0) GpucStats();
+    {   // the presenter's own vertex buffer again (the compositor used its own)
+        C3D_BufInfo *bi = C3D_GetBufInfo();
+        BufInfo_Init(bi);
+        BufInfo_Add(bi, sVtx, sizeof(Vtx), 2, 0x10);
+    }
+    C3D_Tex *tallTex = useGpu ? GpucTall() : &sTall, *rightTex = useGpu ? GpucRight() : &sRight;
 
     // ---- geometry. Texture coordinates are fractions of the (padded) texture. ----
     const float W = TEX_TALL_W, H = TEX_TALL_H, HR = TEX_RIGHT_H;
@@ -218,9 +283,9 @@ void GpuPresentTall(const u16 *tall, const u16 *right)
 
     if (!gPortView) {
         // whole table 1:1: rows 0-239 on the top screen at x 80, rows 240-479 on the bottom one at x 40
-        top[nt++] = (Draw){ &sTall, 0, sNV, 6 };  Quad(80, 0, 320, 240, 0, 0, 240.0f / W, 240.0f / H);
-        bot[nb++] = (Draw){ &sTall, 0, sNV, 6 };  Quad(40, 0, 280, 240, 0, 240.0f / H, 240.0f / W, 480.0f / H);
-        if (right) { topR[ntr++] = (Draw){ &sRight, 0, sNV, 6 }; Quad(80, 0, 320, 240, 0, 0, 240.0f / W, 240.0f / HR); }
+        top[nt++] = (Draw){ tallTex, 0, sNV, 6 };  Quad(80, 0, 320, 240, 0, 0, 240.0f / W, 240.0f / H);
+        bot[nb++] = (Draw){ tallTex, 0, sNV, 6 };  Quad(40, 0, 280, 240, 0, 240.0f / H, 240.0f / W, 480.0f / H);
+        if (right) { topR[ntr++] = (Draw){ rightTex, 0, sNV, 6 }; Quad(80, 0, 320, 240, 0, 0, 240.0f / W, 240.0f / HR); }
     } else {
         // following view: 4/3 scale, output row y shows board row (r0x16 + 12 y) / 16. At rest the picture is sampled
         // pixel for pixel (hard edges); while the camera moves it is filtered so the table scrolls smoothly.
@@ -230,21 +295,21 @@ void GpuPresentTall(const u16 *tall, const u16 *right)
         const float ru0 = (0.25f + eps) / W, ru1 = (240.25f + eps) / W;       // 3 source pixels -> 4 output pixels, as the CPU zoom does
         // top screen: 240 output rows = 180 board rows
         float v0 = rt + 0.125f + eps;
-        top[nt++] = (Draw){ &sTall, moving, sNV, 6 };  Quad(40, 0, 360, 240, ru0, v0 / H, ru1, (v0 + 180.0f) / H);
+        top[nt++] = (Draw){ tallTex, moving, sNV, 6 };  Quad(40, 0, 360, 240, ru0, v0 / H, ru1, (v0 + 180.0f) / H);
         // bottom screen starts gPortSeam output rows further on
         float b0 = rt + 180.0f + gPortSeam * 0.75f + 0.125f + eps;
-        bot[nb++] = (Draw){ &sTall, moving, sNV, 6 };  Quad(0, 0, 320, 240, ru0, b0 / H, ru1, (b0 + 180.0f) / H);
+        bot[nb++] = (Draw){ tallTex, moving, sNV, 6 };  Quad(0, 0, 320, 240, ru0, b0 / H, ru1, (b0 + 180.0f) / H);
         if (right) {
             // the right eye exists for board rows 0-239 only; below that both eyes see the flat picture
             int split = (int)((239.5f - rt) / 0.75f + 0.999f);
             if (split < 0) split = 0;
             if (split > 240) split = 240;
             if (split > 0) {
-                topR[ntr++] = (Draw){ &sRight, moving, sNV, 6 };
+                topR[ntr++] = (Draw){ rightTex, moving, sNV, 6 };
                 Quad(40, 0, 360, (float)split, ru0, v0 / HR, ru1, (v0 + 0.75f * split) / HR);
             }
             if (split < 240) {
-                topR[ntr++] = (Draw){ &sTall, moving, sNV, 6 };
+                topR[ntr++] = (Draw){ tallTex, moving, sNV, 6 };
                 Quad(40, (float)split, 360, 240, ru0, (v0 + 0.75f * split) / H, ru1, (v0 + 180.0f) / H);
             }
         }
@@ -271,7 +336,7 @@ void GpuPresentTall(const u16 *tall, const u16 *right)
     u32 t4 = PlatTicksUs();
     PerfAdd(PERF_VSYNC, t4 - t3);
     C3D_FrameEnd(0);
-    PerfAdd(PERF_GPU, (t3 - t2) + (PlatTicksUs() - t4));
+    PerfAdd(PERF_GPU, (t3 - t2) - tComp + (PlatTicksUs() - t4));
     if (sGuardFrames >= 0 && ++sGuardFrames >= GUARD_FRAMES) { GuardRemove(); PlatLog("gpu: %d good frames, boot guard removed", GUARD_FRAMES); }
 }
 

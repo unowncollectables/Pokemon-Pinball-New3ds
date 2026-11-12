@@ -255,12 +255,6 @@ static u16 sPalShadow[512];
 static u16 sOamShadow[512];
 static int sCacheValid;
 
-typedef struct {
-    s16 x, y;
-    u8 w, h, prio, flags, aff, ui;
-    u16 tile, palbase;
-} Spr;
-enum { SF_AFFINE = 1, SF_DOUBLE = 2, SF_H = 4, SF_V = 8, SF_8BPP = 16, SF_SEMI = 32 };
 static Spr sSpr[128];
 static u8 sSprLive[128];               // OAM slot -> index in sSpr, or 0xFF
 static u32 sLineMask[GBA_H][4];        // sprites touching each line, by OAM slot
@@ -273,6 +267,7 @@ static inline u16 To565(u16 c)
     return (u16)((r << 11) | (((g << 1) | (g >> 4)) << 5) | b);
 }
 
+static int sBandPalDirty = 1;          // the palette changed since the band picture was drawn
 static u32 sPalChg[8];                 // background palette entries whose colour changed since the cached layers last looked
 
 // Reads the palette again and notes which background entries now show a different colour.
@@ -497,20 +492,34 @@ static inline u16 Join(int r, int g, int b) { return (u16)((r << 11) | (((g << 1
 
 static __thread Ctx sCtx;
 
+// The game's own code only runs at VBlank, so palette and OAM can change inside the visible frame only through a VCount or
+// HBlank interrupt handler or an HBlank DMA. Without one of those they are compared with their shadow copies once per frame
+// (line 0) instead of on all 160 lines (about a third of the menu screens' time).
+static int sLineWatch;
+
 void PpuRenderLine(int y, u16 *dst)
 {
     sIo = gGbaIo;
     u16 dispcnt = R16(0);
+    if (y == 0) {
+        sLineWatch = (R16(4) & 0x30) != 0;                                   // VCount or HBlank interrupt enabled
+        for (int ch = 0; ch < 4; ch++) {
+            u16 cnt = R16(0xBA + 12 * ch);
+            if ((cnt & 0x8000) && ((cnt >> 12) & 3) == 2) sLineWatch = 1;    // DMA that starts at HBlank
+        }
+    }
+    if (!sCacheValid || y == 0 || sLineWatch) {
+        if (!sCacheValid || memcmp(sPalShadow, gGbaPltt, sizeof sPalShadow)) UpdatePal565();
+        if (!sCacheValid || memcmp(sOamShadow, gGbaOam, sizeof sOamShadow)) {
+            RebuildSprites();
+            memcpy(sOamShadow, gGbaOam, sizeof sOamShadow);
+        }
+        sCacheValid = 1;
+    }
     if (dispcnt & 0x80) {                              // forced blank shows white
         for (int x = 0; x < GBA_W; x++) dst[x] = 0xFFFF;
         return;
     }
-    if (!sCacheValid || memcmp(sPalShadow, gGbaPltt, sizeof sPalShadow)) UpdatePal565();
-    if (!sCacheValid || memcmp(sOamShadow, gGbaOam, sizeof sOamShadow)) {
-        RebuildSprites();
-        memcpy(sOamShadow, gGbaOam, sizeof sOamShadow);
-    }
-    sCacheValid = 1;
 
     u16 bld = R16(0x50);
     int effect = (bld >> 6) & 3, tgt1 = bld & 0x3F, tgt2 = (bld >> 8) & 0x3F;
@@ -626,6 +635,7 @@ extern u8 gBoardBGTileBuffer[], gBoardBGTileBufferAlt[];   // the board picture,
 
 void PpuLatchLine(int y) { memcpy(sLineRegs[y], gGbaIo, sizeof sLineRegs[y]); }
 
+static int sNTSpr;                      // sprites in sTSpr this frame
 static void RebuildSpritesTall(void)
 {
     const u16 *oam = (const u16 *)gOamSnap;
@@ -666,6 +676,7 @@ static void RebuildSpritesTall(void)
         }
         n++;
     }
+    sNTSpr = n;
 }
 
 // One text background row. world: scrolled by row alone (the camera is gone);
@@ -826,6 +837,7 @@ typedef struct {
 static Layer sLayer[3];
 static u8 sLayerIdx[3][TALL_H * LSTRIDE];
 static u16 sLayerPix[3][TALL_H * LSTRIDE];
+static u8 sRowDirty[3][TALL_H];         // rows of the stored layers that changed since the GPU texture last took them
 
 static void LayerSources(int n, u16 cnt, const u8 **chr0, u32 *len0, const u8 **chr1, u32 *len1)
 {
@@ -905,6 +917,7 @@ static void RefreshLayerColours(Layer *L, int n)
         const u8 *idx = idxBase + R * LSTRIDE;
         u16 *pix = pixBase + R * LSTRIDE;
         for (u32 j = 0; j < W; j++) if (idx[j]) pix[j] = sPal565[idx[j]];
+        sRowDirty[n - 1][R] = 1;
     }
 }
 
@@ -954,6 +967,7 @@ static void BuildLayerRow(int n, int R)
     memcpy(out + wmask + 1, out, GBA_W);        // the wrap-around copy
     L->cnt = cnt;
     FinishLayerRow(L, n, R);
+    sRowDirty[n - 1][R] = 1;
 }
 
 static void RefreshLayers(void)
@@ -980,6 +994,7 @@ static void RefreshLayers(void)
         }
         if (palChanged) RefreshLayerColours(L, n);
     }
+    sBandPalDirty |= palChanged;
     memset(sPalChg, 0, sizeof sPalChg);
     sIo = gGbaIo;
 }
@@ -1140,6 +1155,177 @@ static void RunJob(void *arg)
     memset(sEyeDX, 0, sizeof sEyeDX);
 }
 
+// ---- GPU composition: a description of the frame for platform/gpucomp3ds.c ---------------------------------
+// The CPU keeps what is cheap and exact on it (the layer caches, the sprite list, the fixed band) and the platform draws
+// BG1-BG3 and the sprites as textured rectangles. Frames outside the simple subset (blending, fades, windows, mosaic,
+// affine / semi-transparent / 256-colour sprites, per-line changes other than BG0's scroll) are not described:
+// PpuGpuFrameGet() returns NULL and the CPU compose below is the frame.
+int gPpuGpuCompose;
+static PpuGpuFrame sGpuFrame;
+static int sGpuFrameOk, sGpuWasOn;
+static u16 *sStageLayer[3], *sStageBand;
+static u16 sBandRowA[GBA_W + 16], sBandRowB[GBA_W + 16];
+
+void PpuGpuSetStage(u16 *layer[3], u16 *band)
+{
+    for (int i = 0; i < 3; i++) sStageLayer[i] = layer[i];
+    sStageBand = band;
+    sGpuWasOn = 0;
+}
+const u16 *PpuPal565(void) { return sPal565; }
+const PpuGpuFrame *PpuGpuFrameGet(void) { return sGpuFrameOk ? &sGpuFrame : NULL; }
+
+static inline u16 To5551(u16 c) { return (u16)((c & 0xF800) | (c & 0x07C0) | ((c & 0x1F) << 1) | 1); }   // RGB565 (made from 5-bit colour) -> RGBA5551, opaque
+
+const u16 *PpuGpuLayerStage(int n, int *rowLo, int *rowHi)
+{
+    Layer *L = &sLayer[n - 1];
+    u16 *st = sStageLayer[n - 1];
+    if (!st || !L->valid) return NULL;
+    int lo = TALL_H, hi = -1;
+    for (int R = 0; R < TALL_H; R++) {
+        if (!sRowDirty[n - 1][R]) continue;
+        sRowDirty[n - 1][R] = 0;
+        const u8 *idx = sLayerIdx[n - 1] + R * LSTRIDE;
+        const u16 *pix = sLayerPix[n - 1] + R * LSTRIDE;
+        u16 *d = st + R * LTEXW;
+        for (int j = 0; j < 256 + GBA_W; j++) d[j] = idx[j] ? To5551(pix[j]) : 0;
+        if (R < lo) lo = R;
+        hi = R;
+    }
+    if (hi < 0) return NULL;
+    *rowLo = lo & ~7; *rowHi = (hi | 7) + 1;
+    return st;
+}
+
+// A semi-transparent sprite takes the place of every sprite pixel under it (the sprite pixels are resolved first, then
+// the winner is blended with what is beneath), so it hides the sprites it overlaps that it beats. Within one priority
+// level the GPU compositor reproduces that with a sprite buffer (the semi sprite clears it); across levels it
+// does not: those frames are left to the CPU path.
+static int SemiOverlaps(int g)
+{
+    const Spr *a = &sTSpr[g];
+    for (int j = 0; j < sNTSpr; j++) {
+        const Spr *t = &sTSpr[j];
+        if (j == g || (t->flags & SF_SEMI) || t->ui != a->ui) continue;
+        if (!(t->prio > a->prio)) continue;                                              // sprites of lower-priority levels it beats (same level: the compositor resolves it)
+        if (t->x < a->x + a->w && a->x < t->x + t->w && t->y < a->y + a->h && a->y < t->y + t->h) return 1;
+    }
+    return 0;
+}
+
+static u16 sSheetX[PORT_OAM_N], sSheetY[PORT_OAM_N];
+static int sShelfX, sShelfY, sShelfH;
+// Gives the picture of affine sprite i (plus a transparent margin of 8 on every side) a place in the sheet: shelf packing.
+static int SheetFit(int i)
+{
+    int cw = (sTSpr[i].w + 16 + 7) & ~7, ch = (sTSpr[i].h + 16 + 7) & ~7;
+    if (sShelfX + cw > GPU_SHEET) { sShelfX = 0; sShelfY += sShelfH; sShelfH = 0; }
+    if (sShelfY + ch > GPU_SHEET) return 0;
+    sSheetX[i] = (u16)sShelfX; sSheetY[i] = (u16)sShelfY;
+    sShelfX += cw; if (ch > sShelfH) sShelfH = ch;
+    return 1;
+}
+
+static unsigned sWhy[12];
+static int GpuEligible(void)
+{
+    sIo = sLineRegs[0];
+    sShelfX = sShelfY = sShelfH = 0;
+    u16 dispcnt = R16(0);
+    if (dispcnt & 0xE080) { sWhy[1]++; return 0; }                              // forced blank, windows
+    {   // alpha blending is not drawn by the GPU; a brightness fade of everything (all six targets) is, as one blended quad
+        u16 bld = R16(0x50); int effect = (bld >> 6) & 3;
+        if (effect == 1 || (effect >= 2 && (bld & 0x3F) != 0x3F)) { sWhy[2]++; return 0; }
+        if (effect >= 2 && (dispcnt & 0x1000))
+            for (int i = 0; i < sNTSpr; i++) if (sTSpr[i].flags & SF_SEMI) { sWhy[2]++; return 0; }   // semi sprites that blend skip the fade on the CPU path
+    }
+    for (int n = 0; n < 4; n++)
+        if ((dispcnt & (0x100 << n)) && (R16(0x08 + n * 2) & 0x40) && (R16(0x4C) & 0xFF)) { sWhy[3]++; return 0; }     // mosaic
+    for (int n = 1; n <= 3; n++)
+        if (dispcnt & (0x100 << n))
+            if (!sStageLayer[n - 1] || !sLayer[n - 1].valid || ((R16(0x08 + n * 2) >> 14) & 1)) { sWhy[4]++; return 0; } // 256-wide cached layers only
+    if (!sStageBand) { sWhy[5]++; return 0; }
+    if (dispcnt & 0x1000)
+        for (int i = 0; i < sNTSpr; i++) {
+            u8 fl = sTSpr[i].flags;
+            if (fl & SF_8BPP) { sWhy[6]++; sWhy[10]++; return 0; }
+            if ((fl & SF_AFFINE) && ((fl & SF_SEMI) || !SheetFit(i))) { sWhy[6]++; sWhy[8]++; return 0; }
+            if (fl & SF_SEMI) {
+                if ((R16(0x52) & 0x1F1F) != 0x1000 || ((R16(0x50) >> 8) & 0x1C) != 0x1C) { sWhy[9]++; return 0; }      // semi sprites are skipped (blend 0:16 = "show what is beneath"); other weights use the CPU path
+                if (SemiOverlaps(i)) { sWhy[11]++; return 0; }                    // a semi sprite replaces the sprites under it (see SemiOverlaps)
+            }
+        }
+    const u8 *a = sLineRegs[0];
+    for (int y = 1; y < GBA_H; y++) {                            // only BG0's scroll (0x10-0x13: the band) may change from line to line
+        const u8 *b = sLineRegs[y];
+        if (memcmp(a, b, 4) || memcmp(a + 8, b + 8, 8) || memcmp(a + 0x14, b + 0x14, 0x58 - 0x14)) { sWhy[7]++; return 0; }
+    }
+    return 1;
+}
+
+// BG0 in its band as RGBA5551: drawn twice onto two different fills; the pixels both drawings agree on are BG0's, the rest is empty.
+static void RenderBand(void)
+{
+    Ctx *c = &sCtx;
+    int changed = 0;
+    // Nothing to draw again when BG0's control, map, tiles, per-line scroll and the palette are what they were.
+    {
+        static u16 bCnt; static u8 bMap[0x2000], bChr[0x4000]; static u8 bScroll[BAND_ROWS][4]; static int bValid;
+        u16 cnt = R16(0x08);
+        u32 maplen = (cnt >> 14) == 3 ? 0x2000 : ((cnt >> 14) ? 0x1000 : 0x800);
+        const u8 *map = gGbaVram + ((cnt >> 8) & 0x1F) * 0x800;
+        const u8 *chr = gGbaVram + ((cnt >> 2) & 3) * 0x4000;
+        int same = bValid && !sBandPalDirty && cnt == bCnt && !memcmp(bMap, map, maplen) && !memcmp(bChr, chr, 0x4000);
+        for (int y = 0; same && y < BAND_ROWS; y++) if (memcmp(bScroll[y], sLineRegs[y] + 0x10, 4)) same = 0;
+        if (same) { sGpuFrame.bandChanged = 0; return; }
+        bCnt = cnt; memcpy(bMap, map, maplen); memcpy(bChr, chr, 0x4000);
+        for (int y = 0; y < BAND_ROWS; y++) memcpy(bScroll[y], sLineRegs[y] + 0x10, 4);
+        bValid = 1; sBandPalDirty = 0;
+    }
+    for (int y = 0; y < BAND_ROWS; y++) {
+        sIo = sLineRegs[y];
+        for (int i = 0; i < GBA_W + 16; i++) { sBandRowA[i] = 0x0000; sBandRowB[i] = 0xFFFF; }
+        c->lb = sBandRowA; FastBgT(c, 0, y, 0, 0);
+        c->lb = sBandRowB; FastBgT(c, 0, y, 0, 0);
+        u16 *d = sStageBand + y * 256;
+        for (int x = 0; x < GBA_W; x++) {
+            u16 a2 = sBandRowA[8 + x], b2 = sBandRowB[8 + x];
+            u16 v = a2 == b2 ? To5551(a2) : 0;
+            if (d[x] != v) { d[x] = v; changed = 1; }
+        }
+    }
+    sGpuFrame.bandChanged = changed;
+}
+
+static void GpuFill(int depth, int stereo)
+{
+    PpuGpuFrame *f = &sGpuFrame;
+    sIo = sLineRegs[0];
+    u16 dispcnt = R16(0);
+    f->ui0 = sUi0;
+    f->back = sPal565[0];
+    for (int n = 0; n < 4; n++) { f->bgOn[n] = (dispcnt >> (8 + n)) & 1; f->bgPrio[n] = R16(0x08 + n * 2) & 3; }
+    for (int n = 1; n <= 3; n++) f->scroll[n] = sLayer[n - 1].scroll;
+    f->nSpr = (dispcnt & 0x1000) ? sNTSpr : 0;
+    f->spr = sTSpr;
+    f->map1d = (dispcnt & 0x40) != 0;
+    f->stereo = stereo;
+    for (int i = 0; i < 4; i++) {
+        int d = stereo ? (sLayerZ[i] * 3 * depth + 256) >> 9 : 0;
+        f->dx[0][i] = d; f->dx[1][i] = -d;
+    }
+    { int a = R16(0x52) & 0x1F, b = (R16(0x52) >> 8) & 0x1F; f->eva = a > 16 ? 16 : a; f->evb = b > 16 ? 16 : b; }
+    { static u8 snap[0x8000]; memcpy(snap, gGbaVram + 0x10000, sizeof snap); f->objChr = snap; }
+    { const u16 *oam = (const u16 *)gGbaOam; for (int m = 0; m < 32; m++) { f->affPar[m][0] = (s16)oam[m * 16 + 3]; f->affPar[m][1] = (s16)oam[m * 16 + 7]; f->affPar[m][2] = (s16)oam[m * 16 + 11]; f->affPar[m][3] = (s16)oam[m * 16 + 15]; }
+      memcpy(f->sheetX, sSheetX, sizeof f->sheetX); memcpy(f->sheetY, sSheetY, sizeof f->sheetY); }
+    { u16 bld = R16(0x50); int effect = (bld >> 6) & 3, evy = R16(0x54) & 0x1F; if (evy > 16) evy = 16;
+      f->fade = effect >= 2 && evy ? effect - 1 : 0; f->evy = evy; }
+    f->bandChanged = 0;
+    if (f->bgOn[0]) RenderBand();
+    sIo = gGbaIo;
+}
+
 // depth 0..256 is the 3D slider; with depth > 0 the upper 240 rows are also drawn for the right eye.
 void PpuRenderTall(u16 *dst, u16 *right, int depth)
 {
@@ -1151,8 +1337,21 @@ void PpuRenderTall(u16 *dst, u16 *right, int depth)
         palOk = 1;
     }
     RebuildSpritesTall();
+    if (gPpuGpuCompose && !sGpuWasOn) { sGpuWasOn = 1; for (int i = 0; i < 3; i++) sLayer[i].valid = 0; }   // rebuild every layer so that every row reaches the textures
     RefreshLayers();
     sStFrames++;
+    sGpuFrameOk = 0;
+    { static unsigned lastBld[8]; unsigned cur[8]; static int logged; const int ln[8] = { 0, 10, 20, 40, 60, 90, 120, 150 };
+      for (int k = 0; k < 8; k++) cur[k] = *(const u16 *)(sLineRegs[ln[k]] + 0x50) | ((unsigned)*(const u16 *)(sLineRegs[ln[k]] + 0x52) << 16);
+      int diff = 0; for (int k = 1; k < 8; k++) if (cur[k] != cur[0]) diff = 1;
+      int chg = memcmp(cur, lastBld, sizeof cur) != 0; memcpy(lastBld, cur, sizeof cur);
+      if ((diff || chg) && logged < 60) { logged++; PlatLog("ppu: bld/alpha per line 0/10/20/40/60/90/120/150: %08x %08x %08x %08x %08x %08x %08x %08x frame %u", cur[0], cur[1], cur[2], cur[3], cur[4], cur[5], cur[6], cur[7], (unsigned)gPortFrame); } }
+    if (gPpuGpuCompose) { static int n; if (++n % 240 == 0) PlatLog("ppu: gpu-ineligible reasons %u %u %u %u %u %u %u", sWhy[1], sWhy[2], sWhy[3], sWhy[4], sWhy[5], sWhy[6], sWhy[7]); if (n % 240 == 0) PlatLog("ppu: ineligible sprite flags affine %u alpha %u 8bpp %u semi-overlap %u frames %u", sWhy[8], sWhy[9], sWhy[10], sWhy[11], (unsigned)gPortFrame); }
+    if (gPpuGpuCompose && GpuEligible()) {
+        GpuFill(depth, depth > 0 && right != NULL);
+        sGpuFrameOk = 1;
+        if (gPpuGpuCompose == 1) { sIo = gGbaIo; return; }      // the GPU draws this frame; mode 2 also draws it here, to compare
+    }
     // The rows are drawn by two threads: the lower half on the New 3DS's spare core,
     // or, with 3D on, one eye each. Each task is a run of rows for one eye.
     Job a, w;
