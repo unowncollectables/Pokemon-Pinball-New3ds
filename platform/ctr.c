@@ -204,6 +204,16 @@ void PlatJobWait(void) { LightEvent_Wait(&sDone); }
 // ---- input -------------------------------------------------------------
 static u16 sKeys;
 
+static void CycleGpuMode(int dir)               // 0 -> 1 -> 3 -> 0, saved at once, applied at the next start
+{
+    static const char order[3] = { '0', '1', '3' };
+    int i = gPortGpuMode == '0' ? 0 : gPortGpuMode == '3' ? 2 : 1;
+    i = (i + dir + 3) % 3;
+    gPortGpuMode = order[i];
+    PlatFileWrite("gpu.cfg", &order[i], 1);
+    LayoutMenuRefresh();
+}
+
 u16 PlatKeys(void) { return sKeys; }
 
 int PlatPump(void)
@@ -213,6 +223,16 @@ int PlatPump(void)
     if (sViewSaveAt && (int)gPortFrame >= sViewSaveAt) { sViewSaveAt = 0; WriteView(); }
     if (hidKeysDown() & KEY_Y) { gPortView ^= 1; SaveView(); }
     u32 k = hidKeysHeld();
+    if (LayoutMenuActive()) {
+        if (hidKeysDown() & KEY_TOUCH) {
+            touchPosition t; hidTouchRead(&t);
+            if (t.py >= 172 && t.py < 192 && t.px >= 16 && t.px < 304) CycleGpuMode(1);
+        }
+        if (k & KEY_SELECT) {
+            if (hidKeysDown() & KEY_DRIGHT) CycleGpuMode(1);
+            if (hidKeysDown() & KEY_DLEFT) CycleGpuMode(-1);
+        }
+    }
     if ((k & KEY_SELECT) && gPortView) {    // SELECT + up/down: tune how many table rows hide behind the gap between the screens
         if ((hidKeysDown() & KEY_DUP) && gPortSeam < 24) { gPortSeam++; SaveView(); }
         if ((hidKeysDown() & KEY_DDOWN) && gPortSeam > 0) { gPortSeam--; SaveView(); }
@@ -394,6 +414,7 @@ void PlatInit(int argc, char **argv)
     mkdir(DATA_DIR, 0777);
     sLog = fopen(DATA_DIR "/log.txt", "w");
 
+    { char c = '1'; if (PlatFileRead("gpu.cfg", &c, 1) == 1 && (c == '0' || c == '1' || c == '2' || c == '3')) gPortGpuMode = gPortGpuStarted = c == '2' ? '1' : c; }
     { char v[2] = { 0, 0 }; int n = PlatFileRead("view.cfg", v, 2); if (n >= 1) gPortView = v[0] == '1'; if (n >= 2 && v[1] >= 'A' && v[1] <= 'A' + 24) gPortSeam = v[1] - 'A'; }
     ClearTop();
     AudioInit();
